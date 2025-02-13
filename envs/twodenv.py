@@ -208,13 +208,17 @@ class TwoDEnv():
         # 定义地图组件
         self.map = CircleMap(num_envs=num_envs, device=device, map_r=5, num_component=10)
 
-        # 定义渲染器
 
     def reset(self):
         self.observed.reset()
         self.quad_state.zero_()
+        self.quad_state[:, 0] = torch.rand((self.num_envs, 1), device=self.device) * 2 * math.pi  # 随机初始化初始朝向
         self.last_step.zero_()  # 将所有剩余步数置 0，以便下一步重置时重新生成新的加速度
+
         self.is_accelerating = True
+        self.phase_steps = random.randint(10, 50)
+
+        self.map.generate_map()
 
     def step(self):
         """更新无人机状态，并控制角速度变化，使其在加速与减速阶段循环变化"""
@@ -236,9 +240,9 @@ class TwoDEnv():
 
             self.is_accelerating = not self.is_accelerating
 
-        # 更新角速度： ω = ω + α * dt，并限制在 [-max_ang_vel, max_ang_vel] 范围内
+        # 更新角速度： ω = ω + α * dt
         self.quad_state[:, 1] += self.quad_state[:, 2] * self.dt
-        self.quad_state[:, 1] = torch.clamp(self.quad_state[:, 1], -self.max_ang_vel, self.max_ang_vel)
+        # self.quad_state[:, 1] = torch.clamp(self.quad_state[:, 1], -self.max_ang_vel, self.max_ang_vel)
         # 更新朝向： θ = θ + ω * dt
         self.quad_state[:, 0] += self.quad_state[:, 1] * self.dt
 
@@ -246,11 +250,81 @@ class TwoDEnv():
         self.last_step -= 1
 
         # 更新观测状态（假设 CameraCoverage 提供 update 方法，根据 quad_state 更新观测信息）
-        self.observed.update(self.quad_state)
+        self.observed.update(self.quad_state[:, 0])
 
-        return self.quad_state
+        # 生成训练数据，返回表示方式为 [cos(theta), sin(theta), distance]
+        training_points = self.generate_training_points()
 
-    def render(self, cam_angle, fov, num_rays, far_clip=4.0):
+        # 获取当前无人机朝向
+        current_angle = self.quad_state[:, 0]
+        # 渲染深度相机数据
+        depth_obs = self.render(current_angle, self.fov)
+        # 根据训练点生成地面真值标签
+        gt_labels = self.generate_ground_truth(training_points)
+
+        # 对当前无人机朝向进行二元编码表示
+        quad_angle_enc = self.angle_encoding(current_angle)
+
+        return depth_obs, quad_angle_enc, training_points, gt_labels
+    
+    def generate_training_points(self):
+        """
+        生成每个环境一个随机点，范围在地图半径内。
+        返回形式为 [cos(theta), sin(theta), distance]，其中 theta 为点的极角，distance 为到原点的距离。
+        """
+        num_envs = self.num_envs
+        map_r = self.map.map_r  # 获取地图半径
+        
+        # 使用极坐标采样保证均匀分布
+        d_squared = torch.rand((num_envs, 1), device=self.device) * (map_r**2)
+        r = torch.sqrt(d_squared)  # 距离
+        theta = torch.rand((num_envs, 1), device=self.device) * 2 * math.pi  # 极角
+        
+        # 使用 angle_encoding 方法得到二元编码（cos, sin）
+        encoding = self.angle_encoding(theta.squeeze(-1))  # shape: (num_envs, 2)
+        # 拼接距离信息，得到 (num_envs, 3)
+        training_points = torch.cat([encoding, r], dim=1)
+        return training_points
+
+    def generate_ground_truth(self, points):
+        """
+        生成地面真值标签
+        :param points: 输入点坐标 (num_envs, 2)
+        :return: 标签张量 (num_envs,), 0=未观测, 1=未遮挡, -1=被遮挡
+        """
+        # 恢复点的 (x, y) 坐标
+        x = points[:, 0] * points[:, 2]
+        y = points[:, 1] * points[:, 2]
+        
+        # 计算目标点的方位角，并标准化到[0, 2π)
+        theta_points = torch.atan2(y, x)
+        theta_points = torch.remainder(theta_points, 2 * math.pi)
+        
+        # 为每个目标点生成独立的渲染结果
+        # 并行处理所有点的渲染请求
+        cam_angles = theta_points  # 使用目标点的方向作为相机朝向
+        depth_obs = self.render(cam_angles, self.fov)
+        
+        # 掩码：将未观测到的点标记为0
+        observed = self.observed.query(theta_points)
+        gt = torch.zeros_like(observed, dtype=torch.int32)
+        
+        # 仅处理已观测点
+        mask = observed.bool()
+        if not mask.any():
+            return gt
+        
+        # 计算遮挡状态
+        distances = torch.sqrt(x**2 + y**2)
+        occluded = distances > depth_obs
+        
+        # 更新标签
+        gt_mask = mask
+        gt[gt_mask] = torch.where(occluded[gt_mask], -1, 1)
+        
+        return gt
+    
+    def render(self, cam_angle, fov, num_rays=64, far_clip=4.0):
         """
         利用深度相机原理对圆形物体进行渲染，返回每个环境中各射线方向上距离最近交点的深度值。
         假设原点始终处于圆的外部。
@@ -259,7 +333,7 @@ class TwoDEnv():
             cam_angle: 相机朝向（弧度）
             fov: 相机视野角度（弧度）
             num_rays: 射线数量（在 fov 内均匀采样）
-            far_clip: 当射线未击中任何圆时赋予的远裁剪距离 默认 100.0
+            far_clip: 当射线未击中任何圆时赋予的远裁剪距离 默认 4.0
 
         返回：
             depth: 形状 (num_envs, num_rays) 的张量，每个元素表示对应射线的深度值
@@ -336,3 +410,13 @@ class TwoDEnv():
         plt.savefig(self.output_path + '/render_visual.png')
         plt.show()
 
+    @staticmethod
+    def angle_encoding(angle: torch.Tensor) -> torch.Tensor:
+        """
+        输入角度，返回由余弦和正弦组成的二元编码。
+        参数：
+            angle (torch.Tensor): 形状 (...,)，角度（弧度）
+        返回：
+            torch.Tensor: 对应的二元编码，形状 (..., 2)
+        """
+        return torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1)

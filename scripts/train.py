@@ -29,7 +29,7 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=1.6e-5, help="The learning rate of the optimizer")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-5, help="The learning rate of the optimizer")
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=40900, help="Number of epochs")
@@ -67,6 +67,7 @@ def dump_yaml(file_path, data):
         yaml.safe_dump(data, f)
 
 if __name__ == "__main__":
+	torch.autograd.set_detect_anomaly(True)
 	args = get_args()
 	run_name = f"{args.task}__{args.experiment_name}__{args.seed}__{get_time()}"
 
@@ -79,7 +80,7 @@ if __name__ == "__main__":
 	os.makedirs(save_dir, exist_ok=True)
 	dump_yaml(log_dir, params)
 
-	writer = SummaryWriter(f"/home/wangzimo/VTT/VTT/ZSLAM/runs/{run_name}")
+	writer = SummaryWriter(f"/home/wangzimo/VTT/ZSLAM/runs/{run_name}")
 
 	device = args.device
 	print("using device:", device)
@@ -90,7 +91,7 @@ if __name__ == "__main__":
 
 	envs = TwoDEnv(num_envs=args.batch_size, device=args.device)
 
-	model = ZSLAModel(input_dim=64, hidden_dim=64, output_dim=1)
+	model = ZSLAModel(input_dim=64+2, hidden_dim=64, output_dim=1, device=device)
 	# model.load_model(path=args.param_load_path, device=device)
 	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
 	criterion = nn.MSELoss()
@@ -100,18 +101,28 @@ if __name__ == "__main__":
 
 		h0 = None
 		envs.reset()
+		sum_loss = 0
 
 		for step in range(args.len_sample):
 
 			depth_obs, quad_angle_enc, training_points, gt_labels = envs.step()
 
 			input_tmp = torch.cat((depth_obs, quad_angle_enc), dim=1)
-			output = model(input_tmp, training_points, h0)
+			output, h0 = model(input_tmp, training_points, h0)
+			output = output.squeeze(1)
+			# print(output[0], gt_labels[0])
 			loss = criterion(output, gt_labels)
-			loss.backward()
+			loss.backward(retain_graph=True)
 			optimizer.step()
 
-		if not (epoch % 200):
+			h0 = h0.detach()
+			sum_loss += loss
+
+		ave_loss = sum_loss / args.len_sample
+		print("Ave Loss", ave_loss)
+		writer.add_scalar('Loss', ave_loss.item(), epoch)
+
+		if not (epoch % 200) and epoch:
 			print("Saving Model...")
 			model.save_model(args.param_save_path)
 

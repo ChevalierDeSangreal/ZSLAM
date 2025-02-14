@@ -1,1 +1,1 @@
-from zslam import *
+from .zslam import *

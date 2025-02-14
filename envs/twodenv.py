@@ -190,6 +190,7 @@ class TwoDEnv():
         self.device = device
         self.fov = 2 * math.pi * 60 / 360
         self.dt = 0.02
+        self.num_rays = 64
 
         self.max_ang_vel = math.radians(60)  # 60° 转换为弧度
 
@@ -212,7 +213,7 @@ class TwoDEnv():
     def reset(self):
         self.observed.reset()
         self.quad_state.zero_()
-        self.quad_state[:, 0] = torch.rand((self.num_envs, 1), device=self.device) * 2 * math.pi  # 随机初始化初始朝向
+        self.quad_state[:, 0] = torch.rand((self.num_envs,), device=self.device) * 2 * math.pi  # 随机初始化初始朝向
         self.last_step.zero_()  # 将所有剩余步数置 0，以便下一步重置时重新生成新的加速度
 
         self.is_accelerating = True
@@ -258,14 +259,14 @@ class TwoDEnv():
         # 获取当前无人机朝向
         current_angle = self.quad_state[:, 0]
         # 渲染深度相机数据
-        depth_obs = self.render(current_angle, self.fov)
+        depth_obs = self.render(current_angle, self.fov, num_rays=self.num_rays)
         # 根据训练点生成地面真值标签
         gt_labels = self.generate_ground_truth(training_points)
 
         # 对当前无人机朝向进行二元编码表示
         quad_angle_enc = self.angle_encoding(current_angle)
 
-        return depth_obs, quad_angle_enc, training_points, gt_labels
+        return depth_obs.detach(), quad_angle_enc.detach(), training_points.detach(), gt_labels.detach()
     
     def generate_training_points(self):
         """
@@ -303,11 +304,11 @@ class TwoDEnv():
         # 为每个目标点生成独立的渲染结果
         # 并行处理所有点的渲染请求
         cam_angles = theta_points  # 使用目标点的方向作为相机朝向
-        depth_obs = self.render(cam_angles, self.fov)
+        depth_obs = self.render(cam_angles, self.fov, num_rays=self.num_rays)[:, self.num_rays // 2]
         
         # 掩码：将未观测到的点标记为0
         observed = self.observed.query(theta_points)
-        gt = torch.zeros_like(observed, dtype=torch.int32)
+        gt = torch.zeros_like(observed, dtype=torch.float32)
         
         # 仅处理已观测点
         mask = observed.bool()
@@ -320,7 +321,7 @@ class TwoDEnv():
         
         # 更新标签
         gt_mask = mask
-        gt[gt_mask] = torch.where(occluded[gt_mask], -1, 1)
+        gt[gt_mask] = torch.where(occluded[gt_mask], -1, 1).to(gt.dtype)
         
         return gt
     
@@ -339,8 +340,8 @@ class TwoDEnv():
             depth: 形状 (num_envs, num_rays) 的张量，每个元素表示对应射线的深度值
         """
         # 1. 生成射线角度（形状：(num_rays,)），并扩展维度以便广播
-        ray_angles = cam_angle + torch.linspace(-fov/2, fov/2, steps=num_rays, device=self.device)
-        ray_angles = ray_angles.view(1, 1, num_rays)  # 形状：(1, 1, num_rays)
+        ray_angles = cam_angle.unsqueeze(-1) + torch.linspace(-fov/2, fov/2, steps=num_rays, device=self.device)
+        ray_angles = ray_angles.view(self.num_envs, 1, num_rays)  # 形状：(1, 1, num_rays)
 
         # 2. 提取每个圆的中心 (x, y) 和半径 r
         centers = self.map.map_componet[:, :, :2]  # 形状：(num_envs, num_component, 2)

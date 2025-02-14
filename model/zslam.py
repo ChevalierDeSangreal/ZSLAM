@@ -4,23 +4,28 @@ import torch.nn as nn
 class ZSLAModel(nn.Module):
     def __init__(
         self,
-        input_dim=64,      # 每帧输入的维度
+        input_dim=66,      # 每帧输入的维度
         hidden_dim=64,     # GRU 的隐状态维度
         output_dim=1,      # Decoder 输出维度(示例)
+        device='cpu',
     ):
         super(ZSLAModel, self).__init__()
         
         self.hidden_dim = hidden_dim  # 方便在 forward 里使用
+        self.device = device  # 保存设备信息
+
         # 双层 GRU，batch_first=True 方便处理 (batch, seq, feature)
         self.gru = nn.GRU(input_size=input_dim, hidden_size=hidden_dim, batch_first=True, num_layers=2)
         
         # Decoder: (h) -> 输出
         self.decoder = nn.Sequential(
-            nn.Linear(hidden_dim + 2, 64),
+            nn.Linear(hidden_dim + 3, 64),
             nn.ReLU(),
             nn.Linear(64, output_dim),
             nn.Tanh()  # 归一化到 [-1, 1]
         )
+
+        self.to(self.device)
     
     def forward(self, x, query, h=None):
         """
@@ -36,6 +41,7 @@ class ZSLAModel(nn.Module):
         # 如果没有传入上一时刻隐藏层，就初始化为0
         if h is None:
             h = torch.zeros(2, x.size(0), self.hidden_dim, device=x.device)
+            # print("Here I am!!!!!!!!!!", x.device, h.device)
         
         # GRU 的输入需要 (batch_size, seq_len=1, input_dim)
         x = x.unsqueeze(1)  # [batch_size, 1, input_dim]

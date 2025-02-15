@@ -192,7 +192,7 @@ class TwoDEnv():
         self.dt = 0.02
         self.num_rays = 64
 
-        self.max_ang_vel = math.radians(60)  # 60° 转换为弧度
+        self.max_ang_vel = math.radians(900)  # 60° 转换为弧度
 
         self.output_path = '/home/wangzimo/VTT/ZSLAM/output'
 
@@ -227,7 +227,7 @@ class TwoDEnv():
         if self.last_step[0].item() == 0:
             if self.is_accelerating:
                 # 随机生成本阶段的持续步数（例如 10 到 50 步之间）
-                self.phase_steps = random.randint(10, 50)
+                self.phase_steps = random.randint(10, 15)
                 # 根据最大角速度和持续时间计算角加速度大小
                 # 注意：phase_steps * dt 为本阶段的持续时间
                 current_acc = self.max_ang_vel / (self.phase_steps * self.dt)
@@ -292,7 +292,7 @@ class TwoDEnv():
     def generate_training_points(self):
         """
         生成每个环境一个随机点，范围在地图半径内。
-        返回形式为 [cos(theta), sin(theta), distance]，其中 theta 为点的极角，distance 为到原点的距离。
+        返回形式为 [cos(theta), sin(theta), distance]，其中 theta 为点的极角 distance 为到原点的距离。
         """
         num_envs = self.num_envs
         map_r = self.map.map_r  # 获取地图半径

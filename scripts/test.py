@@ -27,9 +27,10 @@ def get_args():
                         default="/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth",
                         help="加载模型参数的路径")
     parser.add_argument("--device", type=str, default="cuda:0", help="设备")
-    parser.add_argument("--batch_size", type=int, default=1024, help="测试时的批量大小")
+    parser.add_argument("--batch_size", type=int, default=2, help="测试时的批量大小")
     parser.add_argument("--test_steps", nargs="+", type=int,
-                        default=[5, 10, 15, 20, 25, 45, 55, 65, 75, 85, 95, 100],
+                        # default=[5, 7, 9, 10, 15, 20, 25, 45, 55, 65, 75, 85, 95, 100],
+                        default=[5, 7, 9, 10, 15],
                         help="测试时需要评估的步数列表，要求单调递增")
     parser.add_argument("--output_dir", type=str,
                         default="/home/wangzimo/VTT/ZSLAM/test_runs",
@@ -101,7 +102,7 @@ def visualize_samples_on_single_map(env, training_points, gt_labels, predictions
     
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
-    save_path = os.path.join(output_dir, f"test_step_{step_count}_all_samples_one_map_env_{env_idx}.png")
+    save_path = os.path.join(output_dir, f"test_step_{step_count}_all_samples_one_map.png")
     plt.savefig(save_path)
     plt.close(fig)
     print(f"Saved combined samples visualization to {save_path}")
@@ -170,7 +171,7 @@ def main():
                                             cam_angle=cam_angle,
                                             fov=envs.fov,
                                             step_count=current_step,
-                                            env_idx=0,
+                                            env_idx=1,
                                             output_dir=args.output_dir)
         else:
             # 非测试步数仅采用单样本 step 更新环境

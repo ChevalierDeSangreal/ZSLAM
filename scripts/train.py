@@ -29,10 +29,10 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=5.6e-6, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=2, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-5, help="The learning rate of the optimizer")
+	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
-	parser.add_argument("--num_epoch", type=int, default=40900, help="Number of epochs")
+	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
 	parser.add_argument("--len_sample", type=int, default=20, help="Length of a sample")
 	parser.add_argument("--slide_size", type=int, default=10, help="Size of GRU input window")
 	
@@ -120,7 +120,7 @@ if __name__ == "__main__":
 			h0 = h0.clone()
 			sum_loss += loss
 
-		loss.backward(retain_graph=True)
+			loss.backward(retain_graph=True)
 		optimizer.step()
 		
 		ave_loss = sum_loss / args.len_sample

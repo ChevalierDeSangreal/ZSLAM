@@ -133,6 +133,7 @@ def main():
 
     current_step = 0
     max_step = max(test_steps)
+    h = None
     # 在完整的步数递增过程中，按步模拟环境
     while current_step < max_step:
         if (current_step + 1) in test_steps:
@@ -149,7 +150,7 @@ def main():
             input_flat = model_input.view(num_samples * num_envs, -1)
             training_points_flat = training_points.view(num_samples * num_envs, -1)
 
-            output, _ = model(input_flat, training_points_flat, None)
+            output, h = model(input_flat, training_points_flat, h)
             # 修改预测处理逻辑
             output = output.view(num_samples, num_envs, 3)
             predictions = torch.argmax(output, dim=-1)

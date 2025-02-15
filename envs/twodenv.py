@@ -221,7 +221,7 @@ class TwoDEnv():
 
         self.map.generate_map()
 
-    def step(self):
+    def step(self, num_sample=1):
         """更新无人机状态，并控制角速度变化，使其在加速与减速阶段循环变化"""
         # 检查剩余步数是否归零：如果归零则需要重新生成角加速度（对于整个 batch 都相同）
         if self.last_step[0].item() == 0:
@@ -253,15 +253,36 @@ class TwoDEnv():
         # 更新观测状态（假设 CameraCoverage 提供 update 方法，根据 quad_state 更新观测信息）
         self.observed.update(self.quad_state[:, 0])
 
-        # 生成训练数据，返回表示方式为 [cos(theta), sin(theta), distance]
-        training_points = self.generate_training_points()
+        if num_sample == 1:
+            # 生成训练数据，返回表示方式为 [cos(theta), sin(theta), distance]
+            training_points = self.generate_training_points()
 
-        # 获取当前无人机朝向
-        current_angle = self.quad_state[:, 0]
-        # 渲染深度相机数据
-        depth_obs = self.render(current_angle, self.fov, num_rays=self.num_rays)
-        # 根据训练点生成地面真值标签
-        gt_labels = self.generate_ground_truth(training_points)
+            # 获取当前无人机朝向
+            current_angle = self.quad_state[:, 0]
+            # 渲染深度相机数据
+            depth_obs = self.render(current_angle, self.fov, num_rays=self.num_rays)
+            # 根据训练点生成地面真值标签
+            gt_labels = self.generate_ground_truth(training_points)
+        else:
+            # 获取当前无人机朝向
+            current_angle = self.quad_state[:, 0]
+            
+            # 多样本生成：通过 for 循环反复调用生成函数
+            training_points_list = []
+            gt_labels_list = []
+            depth_obs_list = []
+            for _ in range(num_sample):
+                tp = self.generate_training_points()
+                d_obs = self.render(current_angle, self.fov, num_rays=self.num_rays)
+                gt = self.generate_ground_truth(tp)
+                training_points_list.append(tp)
+                depth_obs_list.append(d_obs)
+                gt_labels_list.append(gt)
+            # 将列表中的样本沿新的维度拼接
+            training_points = torch.stack(training_points_list, dim=0)
+            depth_obs = torch.stack(depth_obs_list, dim=0)
+            gt_labels = torch.stack(gt_labels_list, dim=0)
+
 
         # 对当前无人机朝向进行二元编码表示
         quad_angle_enc = self.angle_encoding(current_angle)
@@ -308,7 +329,7 @@ class TwoDEnv():
         
         # 掩码：将未观测到的点标记为0
         observed = self.observed.query(theta_points)
-        gt = torch.zeros_like(observed, dtype=torch.float32)
+        gt = torch.zeros_like(observed, dtype=torch.long)
         
         # 仅处理已观测点
         mask = observed.bool()

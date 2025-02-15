@@ -29,7 +29,7 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=5.6e-5, help="The learning rate of the optimizer")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-6, help="The learning rate of the optimizer")
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=40900, help="Number of epochs")
@@ -38,7 +38,7 @@ def get_args():
 	
 	# model setting
 	parser.add_argument("--param_save_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth', help="The path to save model parameters")
-	parser.add_argument("--param_load_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth', help="The path to load model parameters")
+	parser.add_argument("--param_load_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param_saved/twodrotVer0_5e5_12k.pth', help="The path to load model parameters")
 	
 	args = parser.parse_args()
 
@@ -91,10 +91,12 @@ if __name__ == "__main__":
 
 	envs = TwoDEnv(num_envs=args.batch_size, device=args.device)
 
-	model = ZSLAModel(input_dim=64+2, hidden_dim=64, output_dim=1, device=device)
+	model = ZSLAModel(input_dim=64+2, hidden_dim=64, output_dim=3, device=device)
 	# model.load_model(path=args.param_load_path, device=device)
+
 	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
-	criterion = nn.MSELoss()
+	criterion = nn.CrossEntropyLoss()
+	
 	for epoch in range(args.num_epoch):
 		print(f"Epoch {epoch} begin...")
 		optimizer.zero_grad()
@@ -107,9 +109,10 @@ if __name__ == "__main__":
 
 			depth_obs, quad_angle_enc, training_points, gt_labels = envs.step()
 
+			gt_labels = gt_labels + 1
+
 			input_tmp = torch.cat((depth_obs, quad_angle_enc), dim=1)
 			output, h0 = model(input_tmp, training_points, h0)
-			output = output.squeeze(1)
 			# print(output[0], gt_labels[0])
 			loss = criterion(output, gt_labels)
 			loss.backward(retain_graph=True)

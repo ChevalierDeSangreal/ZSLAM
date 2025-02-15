@@ -6,7 +6,7 @@ class ZSLAModel(nn.Module):
         self,
         input_dim=66,      # 每帧输入的维度
         hidden_dim=64,     # GRU 的隐状态维度
-        output_dim=1,      # Decoder 输出维度(示例)
+        output_dim=3,      # 分类问题类别数：3 (对应 -1, 0, 1)
         device='cpu',
     ):
         super(ZSLAModel, self).__init__()
@@ -22,7 +22,6 @@ class ZSLAModel(nn.Module):
             nn.Linear(hidden_dim + 3, 64),
             nn.ReLU(),
             nn.Linear(64, output_dim),
-            nn.Tanh()  # 归一化到 [-1, 1]
         )
 
         self.to(self.device)
@@ -31,7 +30,7 @@ class ZSLAModel(nn.Module):
         """
         单步前向传播:
           x: [batch_size, input_dim]  —— 单帧输入
-          query: [batch_size, 2]      —— 额外输入信息
+          query: [batch_size, 3]      —— 额外输入信息
           h: [2, batch_size, hidden_dim] —— 上一时刻隐藏层 (可选)
         
         返回:

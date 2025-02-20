@@ -192,7 +192,7 @@ class TwoDEnv():
         self.dt = 0.02
         self.num_rays = 64
 
-        self.max_ang_vel = math.radians(900)  # 60° 转换为弧度
+        self.max_ang_vel = math.radians(180)  # 60° 转换为弧度
 
         self.output_path = '/home/wangzimo/VTT/ZSLAM/output'
 
@@ -221,6 +221,9 @@ class TwoDEnv():
 
         self.map.generate_map()
 
+        # 更新观测状态（假设 CameraCoverage 提供 update 方法，根据 quad_state 更新观测信息）
+        self.observed.update(self.quad_state[:, 0])
+
     def step(self, num_sample=1):
         """更新无人机状态，并控制角速度变化，使其在加速与减速阶段循环变化"""
         # 检查剩余步数是否归零：如果归零则需要重新生成角加速度（对于整个 batch 都相同）
@@ -230,7 +233,7 @@ class TwoDEnv():
                 self.phase_steps = random.randint(10, 15)
                 # 根据最大角速度和持续时间计算角加速度大小
                 # 注意：phase_steps * dt 为本阶段的持续时间
-                current_acc = self.max_ang_vel / (self.phase_steps * self.dt)
+                current_acc = self.max_ang_vel / (self.phase_steps * self.dt) * random.choice([-1, 1])
                 self.quad_state[:, 2].fill_(current_acc)
                 # 重置所有环境的剩余步数
                 self.last_step.fill_(self.phase_steps)

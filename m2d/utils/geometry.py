@@ -29,8 +29,13 @@ def get_circle_points(c, r):
     return points
 
 def transformation(coordinates, center):
-    x, y = coordinates[:, 0], coordinates[:, 1]
-    return torch.stack([-y, x], dim=1) + center
+    x, y = coordinates[..., 0], coordinates[..., 1]
+    return torch.stack([-y, x], dim=-1) + center
+
+def transformation_back(coordinates, center):
+    coordinates -= center
+    x, y = coordinates[..., 0], coordinates[..., 1]
+    return torch.stack([y, -x], dim=-1)
 
 def not_triangle(p0, p1, p2, device="cpu"):
     p0, p1, p2 = torch.tensor(p0, device=device), torch.tensor(p1, device=device), torch.tensor(p2, device=device)

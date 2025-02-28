@@ -14,7 +14,8 @@ def single_theta_to_orientation_vector(theta, device="cpu"):
         torch.sin(theta),
     ]).to(device)
 
-if __name__=="__main__":
-    theta = 0.
-    #theta = -3.1415926
-    print(single_theta_to_orientation_vector(theta=theta))
+def theta_to_orientation_vector(theta):
+    ans = torch.zeros((*theta.shape[:-1], 2), dtype=theta.dtype, device=theta.device)
+    ans[..., 0] = torch.cos(theta[..., 0])
+    ans[..., 1] = torch.sin(theta[..., 0])
+    return ans

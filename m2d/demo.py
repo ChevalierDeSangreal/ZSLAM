@@ -12,8 +12,8 @@ if __name__ == "__main__":
         theta=math.pi*0.25,
         field=math.pi*0.5,
         w=4,
-        x=0,
-        y=0,
+        x=0.,
+        y=0.,
         L=10.,
     )
     map = Map(10., 10., ratio=0.01)

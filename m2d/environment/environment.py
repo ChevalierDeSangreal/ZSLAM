@@ -3,6 +3,7 @@ from camera import Camera
 from map import Map
 from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back
+from utils import theta_to_orientation_vector
 from typing import List
 import math
 
@@ -137,6 +138,7 @@ class EnvironmentMultiCamera:
         self.cameras = cameras
         self.cameras = {
             'position': torch.stack([camera.position.unsqueeze(0).to(device) for camera in cameras], dim=0),
+            'theta': torch.tensor([camera.theta for camera in cameras], device=device),
             'orientation': torch.stack([camera.orientation.unsqueeze(0).to(device) for camera in cameras], dim=0),
             'w': cameras[0].w,
             'safe_radius': torch.tensor([camera.safe_radius for camera in cameras], device=device),
@@ -171,9 +173,9 @@ class EnvironmentMultiCamera:
             self.line = torch.stack(self.map.line_array).to(self.device)
         if len(self.map.triangle_point_array) != 0:
             self.triangle_points = torch.stack(self.map.triangle_point_array).to(self.device)
-        self.points = transformation_back(self.get_map_grid(), self.map_center)
-        self.points = self.points.expand(self.batch_size, -1, -1)
-        pass
+        points, _, _ = self.get_map_grid(self.map)
+        self.points = transformation_back(points, self.map_center) * ratio
+        self.safe_set = transformation_back(self.get_safe_set(), self.map_center) * ratio
     
     def init_visual_grid(self):
         points = None
@@ -196,6 +198,48 @@ class EnvironmentMultiCamera:
             valid = (points[:, 0] >= 0) & (points[:, 0] < self.H) & (points[:, 1] >= 0) & (points[:, 1] < self.W)
             points = points[valid]
             self.grid[points[:, 0], points[:, 1]] = True
+
+    def get_safe_set(self):
+        r = torch.max(self.cameras['safe_radius']).item()
+        safe_map = Map(
+            width=self.map.width,
+            height=self.map.height,
+            ratio=self.map.ratio
+        )
+        for i in range(len(self.map.circle_center_array)):
+            safe_map.add_circle(
+                x=self.map.circle_center_array[i][0].item(),
+                y=self.map.circle_center_array[i][1].item(),
+                r=self.map.circle_radius_array[i][0].item()+r
+            )
+        for i in range(len(self.map.triangle_point_array)):
+            p0, p1, p2 = self.map.triangle_point_array[i][0], self.map.triangle_point_array[i][1], self.map.triangle_point_array[i][2]
+            v0, v1, v2 = p1-p2, p2-p0, p0-p1
+            v0_, v1_, v2_ = torch.tensor([v0[1], -v0[0]]), torch.tensor([v1[1], -v1[0]]), torch.tensor([v2[1], -v2[0]])
+            v0_, v1_, v2_ = v0_/torch.norm(v0_)*r, v1_/torch.norm(v1_)*r, v2_/torch.norm(v2_)*r
+            safe_map.add_triangle(p1.tolist(), (p1+v0_).tolist(), (p2+v0_).tolist())
+            safe_map.add_triangle(p1.tolist(), (p1-v0_).tolist(), (p2-v0_).tolist())
+            safe_map.add_triangle(p2.tolist(), p1.tolist(), (p2+v0_).tolist())
+            safe_map.add_triangle(p2.tolist(), p1.tolist(), (p2-v0_).tolist())
+
+            safe_map.add_triangle(p2.tolist(), (p2+v1_).tolist(), (p0+v1_).tolist())
+            safe_map.add_triangle(p2.tolist(), (p2-v1_).tolist(), (p0-v1_).tolist())
+            safe_map.add_triangle(p0.tolist(), p2.tolist(), (p0+v1_).tolist())
+            safe_map.add_triangle(p0.tolist(), p2.tolist(), (p0-v1_).tolist())
+
+            safe_map.add_triangle(p0.tolist(), (p0+v2_).tolist(), (p1+v2_).tolist())
+            safe_map.add_triangle(p0.tolist(), (p0-v2_).tolist(), (p1-v2_).tolist())
+            safe_map.add_triangle(p1.tolist(), p0.tolist(), (p1+v2_).tolist())
+            safe_map.add_triangle(p1.tolist(), p0.tolist(), (p1-v2_).tolist())
+
+            safe_map.add_triangle(p0.tolist(), p1.tolist(), p2.tolist())
+            safe_map.add_circle(x=p0[0].item(), y=p0[1].item(), r=r)
+            safe_map.add_circle(x=p1[0].item(), y=p1[1].item(), r=r)
+            safe_map.add_circle(x=p2[0].item(), y=p2[1].item(), r=r)
+        #dists = torch.cdist(safe, block)
+        safe_points, _, _ = self.get_map_grid(safe_map)
+        return safe_points
+
 
     def is_collision(self):
         # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
@@ -308,24 +352,25 @@ class EnvironmentMultiCamera:
         # 返回 深度图，比例图（比例小于1则视为物体在成像平面和相机点之间）
         return d_norm * img, img
     
-    def get_map_grid(self):
-        ratio = self.map.ratio
-        H, W = int(self.map.height/ratio), int(self.map.width/ratio)
+    def get_map_grid(self, map:Map):
+        ratio = map.ratio
+        H, W = int(map.height/ratio), int(map.width/ratio)
         center = torch.tensor([H//2, W//2], dtype=torch.float32, device=self.device)
         y = torch.arange(H, device=self.device).view(H, 1).expand(H, W)
         x = torch.arange(W, device=self.device).view(1, W).expand(H, W)
         grid = torch.stack([y, x], dim=-1).to(torch.float32).reshape(-1, 2)
-
-        if len(self.map.circle_center_array) != 0:
-            circle_center = self.circle_center / ratio
-            circle_radius = self.circle_radius / ratio
+        mask = torch.zeros(grid.shape[0], dtype=torch.bool, device=self.device)
+        
+        if len(map.circle_center_array) != 0:        
+            circle_center = torch.stack(map.circle_center_array).to(self.device) / ratio
+            circle_radius = torch.stack(map.circle_radius_array).to(self.device) / ratio
             circle_center = transformation(circle_center, center)
             d = torch.cdist(grid, circle_center)
             in_circle = (d <= circle_radius.T).any(dim=1)
-            grid = grid[~in_circle]
+            mask |= in_circle
         
-        if len(self.map.triangle_point_array) != 0:
-            triangle = self.triangle_points / ratio
+        if len(map.triangle_point_array) != 0:
+            triangle = torch.stack(map.triangle_point_array).to(self.device) / ratio
             triangle = transformation(triangle, center)
 
             A, B, C = triangle[..., 0, :], triangle[..., 1, :], triangle[..., 2, :]
@@ -345,9 +390,9 @@ class EnvironmentMultiCamera:
 
             in_triangle = (u >= 0) & (v >= 0) & (u + v <= 1)
             in_triangle = in_triangle.any(dim=-1)
-            grid = grid[~in_triangle]
+            mask |= in_triangle
 
-        return grid
+        return grid[~mask], grid[mask], mask
     
     def get_img_field(self, radius):
         """
@@ -355,8 +400,7 @@ class EnvironmentMultiCamera:
         """
         #radius = torch.tensor([radius for _ in range(self.batch_size)], device=self.device)
         points = self.points
-        ratio = self.__ratio
-        radius = radius / ratio
+        radius = radius
         # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
         # orientations = torch.stack([camera.orientation.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
         origins = self.cameras['position']
@@ -366,7 +410,7 @@ class EnvironmentMultiCamera:
         vector_norm = torch.norm(vector, dim=-1, keepdim=True)
         cos = product / (vector_norm + 1e-6)
 
-        field = torch.tensor([camera.field for camera in self.cameras], device=self.device)
+        field = self.cameras['field']
         field = torch.cos(field * 0.5).reshape(-1, 1, 1)
 
         in_img_field = (field <= cos) & (vector_norm <= radius)
@@ -379,14 +423,19 @@ class EnvironmentMultiCamera:
     def reset(
             self,
             change_map=False):
-
         if change_map:
             return
         idx = self.reset_idx()
+
         if idx.any():
-            # 还没完成随机初始化，预计在map中加入安全区属性后完成
-            self.cameras['position'] = self.initial_state['position']
-            self.cameras['orientation'] = self.initial_state['orientation']
+            # 随机初始化
+            random_theta = torch.rand(3, device=self.device) * (2 * torch.pi)
+            self.cameras['theta'][idx] = random_theta[idx]
+            random_theta = theta_to_orientation_vector(random_theta.unsqueeze(-1).unsqueeze(-1))
+            self.cameras['orientation'][idx] = random_theta[idx]
+
+            random_idx = torch.randperm(self.safe_set.shape[0])[:self.batch_size]
+            self.cameras['position'][idx] = self.safe_set[random_idx][idx]
 
     def reset_idx(self):
         idx = self.is_collision()

@@ -162,13 +162,3 @@ class Map:
                 
                 self.add_triangle(p0.tolist(), p1.tolist(), p2.tolist())
                 current_area += area_triangle
-
-        # 添加地图四边的线段，地图范围：(-width/2, -height/2) 到 (width/2, height/2)
-        # 底边
-        self.add_line(-self.width/2, -self.height/2, self.width/2, -self.height/2)
-        # 右边
-        self.add_line(self.width/2, -self.height/2, self.width/2, self.height/2)
-        # 顶边
-        self.add_line(self.width/2, self.height/2, -self.width/2, self.height/2)
-        # 左边
-        self.add_line(-self.width/2, self.height/2, -self.width/2, -self.height/2)

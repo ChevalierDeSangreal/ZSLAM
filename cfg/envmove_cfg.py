@@ -16,5 +16,6 @@ class MapCfg:
 
 
 class EnvMoveCfg:
+    dt = 0.02 # 时间步长
     agent_cfg: AgentCfg = AgentCfg()
     map_cfg: MapCfg = MapCfg()

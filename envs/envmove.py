@@ -3,13 +3,13 @@ from camera import Camera
 from map import Map
 from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back, trans_simple, trans_simple_back
-from utils import theta_to_orientation_vector, batch_theta_to_rotation_matrix, batch_theta_to_orientation_vector
+from utils import batch_theta_to_rotation_matrix, batch_theta_to_orientation_vector
 from typing import List
 import math
 from cfg import *
 
 class Agent:
-    def __init__(self, agent_cfg:AgentCfg, batch_size, ori=None, device='cpu'):
+    def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu'):
         """
         初始化无人机代理 配置相机参数 配置无人机参数 配置无人机位置和朝向
 
@@ -17,6 +17,7 @@ class Agent:
             agent_cfg (CameraCfg): 相机配置参数，包括焦距、视场角、图像宽度等。
             ori (float): 相机朝向角度（弧度制），若未提供，则随机初始化。
             batch_size (int): 批大小，即同时模拟的相机数量。
+            dt (float): 时间步长，默认为 0.02。
             device (str): 计算设备，默认为 'cpu'。
 
         主要属性:
@@ -38,6 +39,8 @@ class Agent:
         
         self.batch_size = batch_size
         self.device = device
+
+        self.dt = torch.tensor(dt, dtype=torch.float, device=device)
         
         # 将所有浮点数转换为 tensor.float 类型
         self.f = torch.tensor(agent_cfg.f, dtype=torch.float, device=device)
@@ -58,7 +61,36 @@ class Agent:
         # 计算安全半径
         self.safe_radius = torch.tensor(agent_cfg.safe_radius, dtype=torch.float, device=device) if agent_cfg.safe_radius is not None else self.f / torch.sin(0.5 * self.field)
 
+        self.vel = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+        self.acc = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+        self.att_vel = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
+        self.att_acc = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
+
+    def step(self):
+        # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
+        self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
+        self.vel = self.vel + self.dt * self.acc
+        self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
+        self.att_vel = self.att_vel + self.dt * self.att_acc
+
+        self.R = batch_theta_to_rotation_matrix(self.ori)
+        self.ori_vector = batch_theta_to_orientation_vector(self.ori)
+
+    def reset_idx(self, idx, init_pos):
+        num_reset = len(idx)
+        # 随机初始化无人机初始位置和姿态
+        self.ori[idx] = torch.rand((num_reset, ), dtype=torch.float, device=self.device) * 2 * math.pi
+        self.R[idx] = batch_theta_to_rotation_matrix(self.ori[idx])
+        self.ori_vector[idx] = batch_theta_to_orientation_vector(self.ori[idx])
+        self.pos[idx] = init_pos[idx]
+        self.vel[idx] = 0
+        self.att_vel[idx] = 0
+
     
+    
+
+        
+
 class EnvMove:
     def __init__(
             self, 
@@ -72,7 +104,7 @@ class EnvMove:
 
         self.cfg = EnvMoveCfg()
 
-        self.agent = Agent(self.cfg.agent_cfg, batch_size, device=device)
+        self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device)
 
         self.map = Map(self.cfg.map_cfg)
         self.map.random_initialize()
@@ -91,6 +123,8 @@ class EnvMove:
 
         self.agent.pos = self.generate_safe_pos()
 
+        
+
     def init_grid(self):
         ratio = self.map.ratio
         self.__ratio = ratio
@@ -106,8 +140,7 @@ class EnvMove:
             self.triangle_points = torch.stack(self.map.triangle_point_array).to(self.device)
         points_all, points_no_obstacle, points_obs, point_mask_obstacle, grid, grid_mask_obstacle = self.get_map_grid(self.map)
 
-        # tnnd，这里需要用transformation_back是因为从(0, 0)(W, H)平移到(-W/2, -H/2)(W/2, H/2)的坐标系
-        # 同时在这个坐标系下，y轴是向下的，而在原坐标系下，y轴是向上的
+        # 这里需要用transformation_back是因为从(0, 0)(W, H)平移到(-W/2, -H/2)(W/2, H/2)的坐标系
         # 下面这几个都是[batch_size, number of points, 2]的点集，其中2是float形式的物理xy坐标
         self.points_all = trans_simple_back(points_all, self.map_center) * ratio # 所有点的xy坐标
         self.points_no_obstacle = trans_simple_back(points_no_obstacle, self.map_center) * ratio # 无障碍物的点的xy坐标
@@ -122,6 +155,8 @@ class EnvMove:
         self.grid_safe_mask_obstacle = self.safe_grid_mask_obstacle
 
         self.grid_mask_visible = torch.zeros(self.batch_size, self.W, self.H, dtype=torch.bool, device=self.device)
+        self.grid_visit_time = torch.zeros(size=(self.batch_size, self.W, self.H), dtype=torch.float32, device=self.device)
+        
         
 
     def physical_to_matrix(self, physical_coords):
@@ -415,6 +450,80 @@ class EnvMove:
         # 根据索引从self.points_safe中选取对应的点作为初始位置
         return self.points_safe[indices]
     
+    def compute_nearest_obstacle_vector(self):
+        """
+        计算每个智能体到最近障碍物的距离向量。
+        """
+        if self.points_obstacle.shape[0] == 0:
+            raise ValueError("No obstacle points available.")
+        
+        # 计算所有智能体与所有障碍物点的欧几里得距离
+        dists = torch.cdist(self.agent.pos.unsqueeze(0), self.points_obstacle.unsqueeze(0)).squeeze(0)  # (batch_size, num_obstacles)
+        
+        # 找到最近障碍物的索引
+        min_indices = torch.argmin(dists, dim=1)  # (batch_size,)
+        
+        # 计算距离向量（障碍物位置 - 智能体位置）
+        nearest_obstacle_positions = self.points_obstacle[min_indices]  # (batch_size, 2)
+        distance_vectors = nearest_obstacle_positions - self.agent.pos  # (batch_size, 2)
+        
+        return distance_vectors  # 返回每个智能体到最近障碍物的距离向量
+
+    def get_desired_direction_vector(self):
+        """
+        返回:
+        direction_vector_normalized: torch.Tensor, shape (B, 2)，归一化的二维向量，
+                                    分量分别为 (horizontal, vertical)。
+        """
+        B, H, W = self.batch_size, self.H, self.W
+        device = self.device
+
+        # 第一次调用时定义 x_idx 与 y_idx，并保存为类的属性；后续直接使用已有属性
+        if not hasattr(self, 'x_idx'):
+            self.x_idx = torch.arange(W, device=device).view(1, W, 1)
+        if not hasattr(self, 'y_idx'):
+            self.y_idx = torch.arange(H, device=device).view(1, 1, H)
+        x_idx = self.x_idx
+        y_idx = self.y_idx
+
+        # 将每个智能体的位置扩展为 (B, 1, 1)
+        pos_idx = self.physical_to_matrix(self.agent.pos)  # (B, 2)
+        agent_x = pos_idx[:, 0].clone().view(B, 1, 1)
+        agent_y = pos_idx[:, 1].clone().view(B, 1, 1)
+
+        # 分别构造左右、上下区域的 mask
+        # 左侧区域：所有 x 坐标小于 agent_x
+        left_mask = (x_idx < agent_x)         # (B, W, 1) 自动广播到 (B, W, H)
+        # 右侧区域：所有 x 坐标大于 agent_x
+        right_mask = (x_idx > agent_x)
+        # 上方区域：所有 y 坐标大于 agent_y
+        up_mask = (y_idx > agent_y)           # (B, 1, H)
+        # 下方区域：所有 y 坐标小于 agent_y
+        down_mask = (y_idx < agent_y)
+
+        # 分别对四个方向内的访问次数求和
+        up_sum    = (self.grid_visit_time * up_mask).sum(dim=(1, 2))      # (B,)
+        down_sum  = (self.grid_visit_time * down_mask).sum(dim=(1, 2))
+        left_sum  = (self.grid_visit_time * left_mask).sum(dim=(1, 2))
+        right_sum = (self.grid_visit_time * right_mask).sum(dim=(1, 2))
+
+        # 利用启发式：访问次数越少，则期望越大；这里采用 1/(次数+1)（避免除零）
+        up_desire    = 1.0 / (up_sum + 1.0)
+        down_desire  = 1.0 / (down_sum + 1.0)
+        left_desire  = 1.0 / (left_sum + 1.0)
+        right_desire = 1.0 / (right_sum + 1.0)
+
+        vertical   = up_desire - down_desire  # (B,)
+        horizontal = right_desire - left_desire   # (B,)
+
+        direction_vector = torch.stack([horizontal, vertical], dim=1)  # (B, 2)
+
+        # 归一化（避免除零）
+        norm = torch.norm(direction_vector, dim=1, keepdim=True)
+        direction_vector_normalized = torch.where(norm > 0, direction_vector / norm, direction_vector)
+
+        return direction_vector_normalized
+
     def step(self):
         pass
 
@@ -423,21 +532,22 @@ class EnvMove:
             change_map=False):
         if change_map:
             return
-        idx = self.reset_idx()
+        idx = []
+        self.reset_idx(idx)
 
-        if idx.any():
-            # 随机初始化
-            random_theta = torch.rand(3, device=self.device) * (2 * torch.pi)
-            self.agent.ori[idx] = random_theta[idx]
-            random_theta = theta_to_orientation_vector(random_theta.unsqueeze(-1).unsqueeze(-1))
-            self.agent.ori_vector[idx] = random_theta[idx]
 
-            random_idx = torch.randperm(self.points_safe.shape[0])[:self.batch_size]
-            self.agent.pos[idx] = self.points_safe[random_idx][idx]
 
-    def reset_idx(self):
-        idx = self.is_collision()
-        return idx
+    def reset_idx(self, idx):
+        if len(idx):
+            num_reset = len(idx)
+
+
+
+            # 更新已知点mask
+            self.grid_mask_visible[idx] = 0
+
+
+
     
-    def get_init_pos(self):
-        return None
+
+        return

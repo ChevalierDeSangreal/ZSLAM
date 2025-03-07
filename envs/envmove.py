@@ -36,7 +36,8 @@ class Agent:
             - `safe_radius` 是基于焦距 `f` 和视场角 `field` 计算的最小安全距离。
         """
         assert 0 < agent_cfg.field < math.pi, 'Error::in Agent __init__: Wrong field angle'
-        
+        self.cfg = agent_cfg
+
         self.batch_size = batch_size
         self.device = device
 
@@ -63,18 +64,26 @@ class Agent:
 
         self.vel = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
         self.acc = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+        self.prefer_acc = torch.rand((batch_size, 2), dtype=torch.float, device=device)
         self.att_vel = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
         self.att_acc = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
+
+        self.att_acc_timer = torch.zeros((batch_size, 1), dtype=torch.int, device=device) # 计时器，记录角加速度未变化的时间
+        self.att_acc_change_time = torch.randint(agent_cfg.min_att_acc_change_step, agent_cfg.max_att_acc_change_step, (batch_size, 1), device=device) # 角加速度变化时间间隔
 
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
         self.vel = self.vel + self.dt * self.acc
+        self.vel = torch.clamp(self.vel, self.cfg.max_speed)
         self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
         self.att_vel = self.att_vel + self.dt * self.att_acc
+        self.att_vel = torch.clamp(self.att_vel, self.cfg.max_att_speed)
 
         self.R = batch_theta_to_rotation_matrix(self.ori)
         self.ori_vector = batch_theta_to_orientation_vector(self.ori)
+
+        self.att_acc_timer += 1
 
     def reset_idx(self, idx, init_pos):
         num_reset = len(idx)
@@ -86,6 +95,9 @@ class Agent:
         self.vel[idx] = 0
         self.att_vel[idx] = 0
 
+        self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device)
+        self.att_acc_timer[idx] = 0
+        self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset, 1), device=self.device)
     
     
 
@@ -98,6 +110,7 @@ class EnvMove:
             resolution_ratio=0.0,
             device="cpu",
             ):
+        # 初始化环境之后得手动调用一次reset，用于生成智能体状态、更新可视范围
         # resolution_ratio < 0 不渲染
         self.batch_size = batch_size
         self.device = device
@@ -121,7 +134,6 @@ class EnvMove:
             self.init_visual_grid()
             bool_tensor_visualization(self.grid.to("cpu"))
 
-        self.agent.pos = self.generate_safe_pos()
 
         
 
@@ -233,6 +245,17 @@ class EnvMove:
 
 
     def is_collision(self):
+        """
+        检测当前批次中的智能体是否与环境中的障碍物（圆形、线段、三角形）发生碰撞。
+
+        计算方法：
+        1. 计算智能体与圆形障碍物的欧几里得距离，并判断是否小于安全半径加上圆半径。
+        2. 计算智能体到线段的最近距离，利用判别式检查是否发生碰撞。
+        3. 采用重心坐标法（barycentric coordinates）检查智能体是否位于某个三角形内部。
+
+        返回：
+            torch.Tensor: 形状为 `(batch_size,)`，数据类型为 `torch.bool`，表示每个批次中的智能体是否发生碰撞。
+        """
         # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
         # r = torch.tensor([camera.safe_radius for camera in self.cameras], device=self.device).unsqueeze(-1).unsqueeze(-1)
         origins = self.agent.pos
@@ -450,7 +473,7 @@ class EnvMove:
         # 根据索引从self.points_safe中选取对应的点作为初始位置
         return self.points_safe[indices]
     
-    def compute_nearest_obstacle_vector(self):
+    def get_nearest_obstacle_vector(self):
         """
         计算每个智能体到最近障碍物的距离向量。
         """
@@ -469,7 +492,7 @@ class EnvMove:
         
         return distance_vectors  # 返回每个智能体到最近障碍物的距离向量
 
-    def get_desired_direction_vector(self):
+    def get_invisible_direction_vector(self):
         """
         返回:
         direction_vector_normalized: torch.Tensor, shape (B, 2)，归一化的二维向量，
@@ -524,30 +547,72 @@ class EnvMove:
 
         return direction_vector_normalized
 
-    def step(self):
-        pass
+    def update_acc_attacc(self):
+        """
+        为每个智能体生成当前时刻加速度和角加速度
+        由三个分量合并：指向未知的方向；指向最近障碍物反方向；随机偏好
+        """
 
-    def reset(
-            self,
-            change_map=False):
+        invisible_direction = self.get_invisible_direction_vector()  # (B, 2)
+        nearest_obstacle_vector = self.get_nearest_obstacle_vector()  # (B, 2)
+        prefer_acc = self.agent.prefer_acc  # (B, 2)
+
+        # 计算距离：nearest_obstacle_vector 的模长即为到障碍物的距离
+        distance = torch.norm(nearest_obstacle_vector, dim=1, keepdim=True)  # (B, 1)
+
+        # 定义一个小的常数以防除零
+        epsilon = 1e-8
+
+        # 计算权重：距离越小，权重越大
+        weight = 1 / (distance + epsilon)
+
+        # 获取障碍物反方向向量，并归一化（模长归一为1）
+        obstacle_opp_vector = -nearest_obstacle_vector  # (B, 2)
+        norm = distance + epsilon
+        normalized_obstacle_opp_vector = obstacle_opp_vector / norm
+
+        # 将归一化向量乘以权重，得到加速度分量，其模长随距离调整
+        avoid_obstacle_vector = normalized_obstacle_opp_vector * weight  # (B, 2)
+
+        # 将三个方向的加速度分量合并
+        acc = invisible_direction + avoid_obstacle_vector + prefer_acc  # (B, 2)
+        self.agent.acc = torch.clamp(acc, max=self.cfg.agent_cfg.max_acc)
+
+        # 为每个智能体生成角加速度
+        mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time
+        self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum(), 1), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
+        self.agent.att_acc_timer[mask_change] = 0
+
+        return
+
+    def step(self):
+        self.update_acc_attacc()
+        self.agent.step()
+        self.update_grid_mask_visible()
+
+        mask_reset = self.is_collision()
+        idx_reset = torch.nonzero(mask_reset, as_tuple=True)[0]
+        self.reset_idx(idx_reset)
+
+        return
+
+    def reset(self, change_map=False):
         if change_map:
+            self.map.random_initialize()
+            self.init_grid()
             return
-        idx = []
+        
+        idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)
 
-
+        return
 
     def reset_idx(self, idx):
         if len(idx):
-            num_reset = len(idx)
-
-
-
+            self.agent.reset_idx(idx, self.generate_safe_pos())
             # 更新已知点mask
             self.grid_mask_visible[idx] = 0
+            self.grid_visit_time[idx] = 0
 
-
-
-    
-
+            self.update_grid_mask_visible()
         return

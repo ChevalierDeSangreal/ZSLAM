@@ -8,6 +8,14 @@ class AgentCfg:
     safe_radius = 0.5 # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
     field_radius = 100. # 视场半径，默认为 100.0
 
+    max_speed = 1.0 # 最大速度分量
+    max_acc = 0.5 # 最大加速度分量
+    max_att_acc = math.pi / 3 # 最大角加速度，弧度
+    max_att_speed = math.pi / 3 # 最大角速度，弧度
+
+    max_att_acc_change_step = 100 # 角加速度变化最大时间间隔, 单位为step
+    min_att_acc_change_step = 10 # 角加速度变化最小时间间隔, 单位为step
+
 class MapCfg:
     width = 10. # 地图宽度
     height = 6. # 地图高度

@@ -251,58 +251,49 @@ class EnvMove:
 
 
     def is_collision(self):
-        """
-        检测当前批次中的智能体是否与环境中的障碍物（圆形、线段、三角形）发生碰撞。
-
-        计算方法：
-        1. 计算智能体与圆形障碍物的欧几里得距离，并判断是否小于安全半径加上圆半径。
-        2. 计算智能体到线段的最近距离，利用判别式检查是否发生碰撞。
-        3. 采用重心坐标法（barycentric coordinates）检查智能体是否位于某个三角形内部。
-
-        返回：
-            torch.Tensor: 形状为 `(batch_size,)`，数据类型为 `torch.bool`，表示每个批次中的智能体是否发生碰撞。
-        """
         # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
         # r = torch.tensor([camera.safe_radius for camera in self.cameras], device=self.device).unsqueeze(-1).unsqueeze(-1)
-        origins = self.agent.pos
+        origins = self.agent.pos.unsqueeze(1)
+        # print("??????????????", origins.shape)
         r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
-            # print("Shape of circle_center:", self.circle_center.shape)
-            # print("Shape of origins:", origins.shape)
-            # 将 origins 扩展为 (B, 1, 2)；circle_center 扩展为 (1, num_circles, 2)
-            distance = torch.norm(self.circle_center.unsqueeze(0)-origins.unsqueeze(1), dim=-1, keepdim=True)
+            distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
             sign = (distance - r - self.circle_radius <  0)
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False)
 
         if len(self.map.line_array) != 0:
-            line = self.line 
+            line = self.line.unsqueeze(0)   
             d = line[..., 1, :] - line[..., 0, :]
-            # 计算 f = 线段起点 - origins，扩展为 (B, num_lines, 2)
-            f = line[..., 0, :].unsqueeze(0) - origins.unsqueeze(1)
-            a = torch.sum(d * d, dim=-1).unsqueeze(0)  # (1, num_lines)
-            b = 2 * torch.sum(f * d.unsqueeze(0), dim=-1)  # (B, num_lines)
-            # safe_radius.unsqueeze(1): (1, 1) 会广播至 (B, num_lines)
-            c = torch.sum(f * f, dim=-1) - r.squeeze(1) ** 2  # (B, num_lines)
+            f = line[..., 0, :] - origins
+            a = torch.sum(d * d, dim=-1)
+            b = 2 * torch.sum(f * d, dim=-1)
+            c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
             sign = (b**2 - 4*a*c) >= 0
             is_collision |= sign.any(dim=-1, keepdim=False) 
 
-        if len(self.map.triangle_point_array) != 0:
-            # self.triangle_points: (num_triangles, 3, 2)
-            triangle = self.triangle_points.unsqueeze(0)
-            A, B, C = triangle[..., 0, :], triangle[..., 1, :], triangle[..., 2, :] # （1, num_triangles, 2）
-            v0, v1, v2 = C - A, B - A, origins.unsqueeze(1) - A # (1, num_triangles, 2)
+        if is_collision[1]:
+            print(self.agent.pos[1])
+            # print(self.line[11])
+            collision_lines = torch.nonzero(sign, as_tuple=True)[1]
+            print("Collision with line indices:", collision_lines.tolist())  # 打印发生碰撞的线的索引
+            print("Collision with line!!!")
 
-            dot00 = torch.sum(v0 * v0, dim=-1, keepdim=True)  # (1, num_triangles, 1)
-            dot01 = torch.sum(v0 * v1, dim=-1, keepdim=True)  # (1, num_triangles, 1)
-            dot02 = torch.sum(v0 * v2, dim=-1, keepdim=True)  # (num_points, num_triangles, 1)
-            dot11 = torch.sum(v1 * v1, dim=-1, keepdim=True)  # (1, num_triangles, 1)
-            dot12 = torch.sum(v1 * v2, dim=-1, keepdim=True)  # (num_points, num_triangles, 1)
+        if len(self.map.triangle_point_array) != 0:
+            triangle = self.triangle_points.unsqueeze(0)
+            A, B, C = triangle[..., 0, :], triangle[..., 1, :], triangle[..., 2, :]
+            v0, v1, v2 = C - A, B - A, origins - A
+
+            dot00 = torch.sum(v0 * v0, dim=-1, keepdim=True)
+            dot01 = torch.sum(v0 * v1, dim=-1, keepdim=True)
+            dot02 = torch.sum(v0 * v2, dim=-1, keepdim=True)
+            dot11 = torch.sum(v1 * v1, dim=-1, keepdim=True)
+            dot12 = torch.sum(v1 * v2, dim=-1, keepdim=True)
 
             inv_denom = 1 / (dot00 * dot11 - dot01 * dot01)
             u = (dot11 * dot02 - dot01 * dot12) * inv_denom
             v = (dot00 * dot12 - dot01 * dot02) * inv_denom
-            w = 1 - u - v # (num_points, num_triangles, 1)
+            w = 1 - u - v
             
             sign = ((u >= 0) & (v >= 0) & (w >= 0)).squeeze(-1)
             is_collision |= sign.any(dim=-1, keepdim=False) 

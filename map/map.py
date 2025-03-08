@@ -162,3 +162,35 @@ class Map:
                 
                 self.add_triangle(p0.tolist(), p1.tolist(), p2.tolist())
                 current_area += area_triangle
+
+        # 添加四个狭长的边界三角形
+        boundary_height = 1 * self.ratio  # 确保足够窄
+        w, h = self.width, self.height
+
+        # 上边界
+        self.add_triangle(
+            [-w / 2, h / 2], 
+            [w / 2, h / 2], 
+            [0, h / 2 - boundary_height]
+        )
+
+        # 下边界
+        self.add_triangle(
+            [-w / 2, -h / 2], 
+            [w / 2, -h / 2], 
+            [0, -h / 2 + boundary_height]
+        )
+
+        # 左边界
+        self.add_triangle(
+            [-w / 2, h / 2], 
+            [-w / 2, -h / 2], 
+            [-w / 2 + boundary_height, 0]
+        )
+
+        # 右边界
+        self.add_triangle(
+            [w / 2, h / 2], 
+            [w / 2, -h / 2], 
+            [w / 2 - boundary_height, 0]
+        )

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import sys
+import random
 
 sys.path.append('/home/wangzimo/VTT/ZSLAM')
 
@@ -46,7 +47,17 @@ def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, 
     print(f"Visualization saved to: {save_path}")
     plt.close()
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # 如果使用 GPU，确保所有 CUDA 设备的随机性固定
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False  # 可能会降低某些情况下的性能，但保证了可复现性
+
+
 if __name__ == '__main__':
+    set_seed(42)
     output_path = "/home/wangzimo/VTT/ZSLAM/output"
     
     # 初始化环境
@@ -67,6 +78,7 @@ if __name__ == '__main__':
     while True:
         timer += 1
         idx_reset = env.step()
+        # print(idx_reset)
         if 0 in idx_reset:
             print(f"Reset at {timer}")
             break

@@ -167,30 +167,50 @@ class Map:
         boundary_height = 1 * self.ratio  # 确保足够窄
         w, h = self.width, self.height
 
-        # 上边界
+        # 上边界矩形：区域 [-w/2, w/2] x [h/2 - boundary_height, h/2]
         self.add_triangle(
-            [-w / 2, h / 2], 
-            [w / 2, h / 2], 
-            [0, h / 2 - boundary_height]
+            [-w / 2, h / 2],
+            [w / 2, h / 2],
+            [-w / 2, h / 2 - boundary_height]
+        )
+        self.add_triangle(
+            [-w / 2, h / 2 - boundary_height],
+            [w / 2, h / 2],
+            [w / 2, h / 2 - boundary_height]
         )
 
-        # 下边界
+        # 下边界矩形：区域 [-w/2, w/2] x [-h/2, -h/2 + boundary_height]
         self.add_triangle(
-            [-w / 2, -h / 2], 
-            [w / 2, -h / 2], 
-            [0, -h / 2 + boundary_height]
+            [-w / 2, -h / 2],
+            [w / 2, -h / 2],
+            [-w / 2, -h / 2 + boundary_height]
+        )
+        self.add_triangle(
+            [-w / 2, -h / 2 + boundary_height],
+            [w / 2, -h / 2],
+            [w / 2, -h / 2 + boundary_height]
         )
 
-        # 左边界
+        # 左边界矩形：区域 [-w/2, -w/2 + boundary_height] x [-h/2, h/2]
         self.add_triangle(
-            [-w / 2, h / 2], 
-            [-w / 2, -h / 2], 
-            [-w / 2 + boundary_height, 0]
+            [-w / 2, -h / 2],
+            [-w / 2 + boundary_height, -h / 2],
+            [-w / 2, h / 2]
+        )
+        self.add_triangle(
+            [-w / 2 + boundary_height, -h / 2],
+            [-w / 2 + boundary_height, h / 2],
+            [-w / 2, h / 2]
         )
 
-        # 右边界
+        # 右边界矩形：区域 [w/2 - boundary_height, w/2] x [-h/2, h/2]
         self.add_triangle(
-            [w / 2, h / 2], 
-            [w / 2, -h / 2], 
-            [w / 2 - boundary_height, 0]
+            [w / 2 - boundary_height, -h / 2],
+            [w / 2, -h / 2],
+            [w / 2 - boundary_height, h / 2]
+        )
+        self.add_triangle(
+            [w / 2, -h / 2],
+            [w / 2, h / 2],
+            [w / 2 - boundary_height, h / 2]
         )

@@ -57,7 +57,7 @@ def set_seed(seed):
 
 
 if __name__ == '__main__':
-    set_seed(42)
+    # set_seed(42)
     output_path = "/home/wangzimo/VTT/ZSLAM/output"
     
     # 初始化环境
@@ -78,8 +78,12 @@ if __name__ == '__main__':
     while True:
         timer += 1
         idx_reset = env.step()
+        pos = env.agent.pos[0].cpu().numpy()
+        vel = env.agent.vel[0].cpu().numpy()
+        acc = env.agent.acc[0].cpu().numpy()
+        print(f"Step: {timer}, Pos: {pos}, Vel: {vel}, Acc: {acc}")
         # print(idx_reset)
-        if 0 in idx_reset:
+        if 0 in idx_reset or timer > 5000:
             print(f"Reset at {timer}")
             break
         list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点

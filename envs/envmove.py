@@ -1,5 +1,4 @@
 import torch
-from camera import Camera
 from map import Map
 from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back, trans_simple, trans_simple_back
@@ -75,13 +74,13 @@ class Agent:
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
         self.vel = self.vel + self.dt * self.acc
-        self.vel = torch.clamp(self.vel, self.cfg.max_speed)
+        self.vel = torch.clamp(self.vel, -self.cfg.max_speed, self.cfg.max_speed)
         # print("Before ori:", self.ori.shape)
         # print(self.ori.shape, self)
         self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
         # print("After ori:", self.ori.shape)
         self.att_vel = self.att_vel + self.dt * self.att_acc
-        self.att_vel = torch.clamp(self.att_vel, self.cfg.max_att_speed)
+        self.att_vel = torch.clamp(self.att_vel, -self.cfg.max_att_speed, self.cfg.max_att_speed)
 
         self.R = batch_theta_to_rotation_matrix(self.ori)
         # print("Before ori_vector:", self.ori_vector.shape)
@@ -101,7 +100,7 @@ class Agent:
         self.vel[idx] = 0
         self.att_vel[idx] = 0
 
-        self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device)
+        self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device) * 2 - 1
         self.att_acc_timer[idx] = 0
         self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset,), device=self.device)
     
@@ -259,25 +258,33 @@ class EnvMove:
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
             distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
-            sign = (distance - r - self.circle_radius <  0)
+            sign = (distance - r - self.circle_radius <=  0)
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False)
 
         if len(self.map.line_array) != 0:
-            line = self.line.unsqueeze(0)   
-            d = line[..., 1, :] - line[..., 0, :]
-            f = line[..., 0, :] - origins
-            a = torch.sum(d * d, dim=-1)
-            b = 2 * torch.sum(f * d, dim=-1)
-            c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
-            sign = (b**2 - 4*a*c) >= 0
-            is_collision |= sign.any(dim=-1, keepdim=False) 
+            line = self.line.unsqueeze(0)   # 1, n, 2, 2
+            d = line[..., 1, :] - line[..., 0, :]   # 1, n, 2
+            f0 = line[..., 0, :] - origins   # m, n, 2
+            f1 = line[..., 1, :] - origins   # m, n, 2
+            # r.shape = 1, 1, 
+            sign = (torch.norm(f0, dim=-1, keepdim=True) - r <= 0) | (torch.norm(f1, dim=-1, keepdim=True) - r <= 0)
+            sign_mask = ((d * f1).sum(dim=-1, keepdim=True) >= 0) & ((-d * f0).sum(dim=-1, keepdim=True) >= 0)
 
-        if is_collision[1]:
-            print(self.agent.pos[1])
-            # print(self.line[11])
-            collision_lines = torch.nonzero(sign, as_tuple=True)[1]
-            print("Collision with line indices:", collision_lines.tolist())  # 打印发生碰撞的线的索引
-            print("Collision with line!!!")
+            s = torch.abs((f0[..., 0] * f1[..., 1] - f0[..., 1] * f1[..., 0])).unsqueeze(-1)
+            h = s / torch.norm(d, dim=-1, keepdim=True)
+            sign |= (sign_mask & (h - r <= 0))
+            is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False) 
+            # a = torch.sum(d * d, dim=-1)
+            # b = 2 * torch.sum(f * d, dim=-1)
+            # c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
+            # sign = (b**2 - 4*a*c) >= 0
+
+        # if is_collision[1]:
+        #     print(self.agent.pos[1])
+        #     # print(self.line[11])
+        #     collision_lines = torch.nonzero(sign, as_tuple=True)[1]
+        #     print("Collision with line indices:", collision_lines.tolist())  # 打印发生碰撞的线的索引
+        #     print("Collision with line!!!")
 
         if len(self.map.triangle_point_array) != 0:
             triangle = self.triangle_points.unsqueeze(0)
@@ -539,6 +546,12 @@ class EnvMove:
         left_desire  = 1.0 / (left_sum + 1.0)
         right_desire = 1.0 / (right_sum + 1.0)
 
+        up_desire = up_desire * (self.W // 2 - self.agent.pos[:, 0])
+        down_desire = down_desire * (self.agent.pos[:, 0] + self.W // 2)
+        right_desire = left_desire * (self.H // 2 - self.agent.pos[:, 1])
+        left_desire = right_desire * (self.agent.pos[:, 1] + self.H // 2)
+        print(up_desire[0], down_desire[0], left_desire[0], right_desire[0])
+
         vertical   = up_desire - down_desire  # (B,)
         horizontal = right_desire - left_desire   # (B,)
 
@@ -577,9 +590,15 @@ class EnvMove:
         # 将归一化向量乘以权重，得到加速度分量，其模长随距离调整
         avoid_obstacle_vector = normalized_obstacle_opp_vector * weight  # (B, 2)
 
+        print("--------------------")
+        print("Invisible direction:", invisible_direction[0])
+        print("Avoid obstacle vector:", avoid_obstacle_vector[0])
+        print("Prefer acceleration:", prefer_acc[0])
         # 将三个方向的加速度分量合并
         acc = invisible_direction + avoid_obstacle_vector + prefer_acc  # (B, 2)
-        self.agent.acc = torch.clamp(acc, max=self.cfg.agent_cfg.max_acc)
+        # print("Acceleration:", acc[0])
+        self.agent.acc = torch.clamp(acc, min=-self.cfg.agent_cfg.max_acc, max=self.cfg.agent_cfg.max_acc)
+        # print("Acceleration:", self.agent.acc[0])
 
         # 为每个智能体生成角加速度
         mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time

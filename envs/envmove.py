@@ -259,18 +259,26 @@ class EnvMove:
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
             distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
-            sign = (distance - r - self.circle_radius <  0)
+            sign = (distance - r - self.circle_radius <=  0)
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False)
 
         if len(self.map.line_array) != 0:
-            line = self.line.unsqueeze(0)   
-            d = line[..., 1, :] - line[..., 0, :]
-            f = line[..., 0, :] - origins
-            a = torch.sum(d * d, dim=-1)
-            b = 2 * torch.sum(f * d, dim=-1)
-            c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
-            sign = (b**2 - 4*a*c) >= 0
+            line = self.line.unsqueeze(0)   # 1, n, 2, 2
+            d = line[..., 1, :] - line[..., 0, :]   # 1, n, 2
+            f0 = line[..., 0, :] - origins   # m, n, 2
+            f1 = line[..., 1, :] - origins   # m, n, 2
+            # r.shape = 1, 1, 
+            sign = (torch.norm(f0, dim=-1, keepdim=True) - r <= 0) | (torch.norm(f1, dim=-1, keepdim=True) - r <= 0)
+            sign_mask = ((d * f1).sum(dim=-1, keepdim=True) >= 0) & ((-d * f0).sum(dim=-1, keepdim=True) >= 0)
+
+            s = torch.abs((f0[..., 0] * f1[..., 1] - f0[..., 1] * f1[..., 0])).unsqueeze(-1)
+            h = s / torch.norm(d, dim=-1, keepdim=True)
+            sign |= (sign_mask & (h - r <= 0))
             is_collision |= sign.any(dim=-1, keepdim=False) 
+            # a = torch.sum(d * d, dim=-1)
+            # b = 2 * torch.sum(f * d, dim=-1)
+            # c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
+            # sign = (b**2 - 4*a*c) >= 0
 
         if is_collision[1]:
             print(self.agent.pos[1])

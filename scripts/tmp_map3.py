@@ -1,0 +1,76 @@
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import sys
+
+sys.path.append('/home/wangzimo/VTT/ZSLAM')
+
+from envs import EnvMove  # 请确保 env_move 模块在 Python 路径下
+from cfg import EnvMoveCfg
+
+def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, trajectory, output_path):
+    """
+    绘制环境的自由区域、障碍物、安全区域以及轨迹。
+    """
+    plt.figure(figsize=(8, 8))
+    
+    # 绘制自由点（蓝色）
+    if free_points.shape[0] > 0:
+        plt.scatter(free_points[:, 0], free_points[:, 1], s=1, c='blue', label='Free Points')
+    # 绘制障碍点（红色）
+    if obstacle_points.shape[0] > 0:
+        plt.scatter(obstacle_points[:, 0], obstacle_points[:, 1], s=1, c='red', label='Obstacle Points')
+    # 绘制安全区域点（青色）
+    if safe_points.shape[0] > 0:
+        plt.scatter(safe_points[:, 0], safe_points[:, 1], s=1, c='cyan', label='Safe Points')
+
+    # 绘制轨迹（黑色折线）
+    if len(trajectory) > 0:
+        trajectory = np.array(trajectory)
+        plt.plot(trajectory[:, 0], trajectory[:, 1], c='black', linewidth=1.0, label='Agent Trajectory')
+        # 轨迹起点（绿色）
+        plt.scatter(trajectory[0, 0], trajectory[0, 1], c='green', s=50, marker='o', label='Start')
+        # 轨迹终点（黄色）
+        plt.scatter(trajectory[-1, 0], trajectory[-1, 1], c='yellow', s=50, marker='X', label='End')
+
+    plt.title("Map Grid and Trajectory Visualization")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.legend()
+    plt.gca().set_aspect('equal', adjustable='box')
+
+    # 保存图像
+    save_path = os.path.join(output_path, "map_trajectory_visualization.png")
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    print(f"Visualization saved to: {save_path}")
+    plt.close()
+
+if __name__ == '__main__':
+    output_path = "/home/wangzimo/VTT/ZSLAM/output"
+    
+    # 初始化环境
+    batch_size = 2
+    resolution_ratio = 0
+    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cpu")
+    
+    # 获取环境网格数据
+    free_points = env.points_no_obstacle.cpu().numpy()  # 自由网格点
+    obstacle_points = env.points_obstacle.cpu().numpy()  # 障碍点
+    safe_points = env.points_safe.cpu().numpy()  # 安全区域点
+
+    # 轨迹记录
+    env.reset()
+    list_pos = []
+
+    timer = 0
+    while True:
+        timer += 1
+        idx_reset = env.step()
+        if 0 in idx_reset:
+            print(f"Reset at {timer}")
+            break
+        list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点
+
+    # 可视化地图和轨迹
+    visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path)

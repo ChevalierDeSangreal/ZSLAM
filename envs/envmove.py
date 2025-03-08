@@ -65,23 +65,28 @@ class Agent:
         self.vel = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
         self.acc = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
         self.prefer_acc = torch.rand((batch_size, 2), dtype=torch.float, device=device)
-        self.att_vel = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
-        self.att_acc = torch.zeros((batch_size, 1), dtype=torch.float, device=device)
+        self.att_vel = torch.zeros((batch_size,), dtype=torch.float, device=device)
+        self.att_acc = torch.zeros((batch_size,), dtype=torch.float, device=device)
 
-        self.att_acc_timer = torch.zeros((batch_size, 1), dtype=torch.int, device=device) # 计时器，记录角加速度未变化的时间
-        self.att_acc_change_time = torch.randint(agent_cfg.min_att_acc_change_step, agent_cfg.max_att_acc_change_step, (batch_size, 1), device=device) # 角加速度变化时间间隔
+        self.att_acc_timer = torch.zeros((batch_size,), dtype=torch.int, device=device) # 计时器，记录角加速度未变化的时间
+        self.att_acc_change_time = torch.randint(agent_cfg.min_att_acc_change_step, agent_cfg.max_att_acc_change_step, (batch_size,), device=device) # 角加速度变化时间间隔
 
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
         self.vel = self.vel + self.dt * self.acc
         self.vel = torch.clamp(self.vel, self.cfg.max_speed)
+        # print("Before ori:", self.ori.shape)
+        # print(self.ori.shape, self)
         self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
+        # print("After ori:", self.ori.shape)
         self.att_vel = self.att_vel + self.dt * self.att_acc
         self.att_vel = torch.clamp(self.att_vel, self.cfg.max_att_speed)
 
         self.R = batch_theta_to_rotation_matrix(self.ori)
+        # print("Before ori_vector:", self.ori_vector.shape)
         self.ori_vector = batch_theta_to_orientation_vector(self.ori)
+        # print("After ori_vector:", self.ori_vector.shape)
 
         self.att_acc_timer += 1
 
@@ -91,13 +96,14 @@ class Agent:
         self.ori[idx] = torch.rand((num_reset, ), dtype=torch.float, device=self.device) * 2 * math.pi
         self.R[idx] = batch_theta_to_rotation_matrix(self.ori[idx])
         self.ori_vector[idx] = batch_theta_to_orientation_vector(self.ori[idx])
+        # print("Shape of ori_vector:", self.ori_vector.shape)
         self.pos[idx] = init_pos[idx]
         self.vel[idx] = 0
         self.att_vel[idx] = 0
 
         self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device)
         self.att_acc_timer[idx] = 0
-        self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset, 1), device=self.device)
+        self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset,), device=self.device)
     
     
 
@@ -162,7 +168,7 @@ class EnvMove:
 
         # 下面这三个都是[W, H, 2]的矩阵。实际物理坐标/ratio取整再平移到(-W/2, -H/2)(W/2, H/2)的坐标系就对应矩阵下标
         self.grid_map = grid # 存的就是实际物理坐标了
-        print("Shape of grid:", self.grid_map.shape)
+        # print("Shape of grid:", self.grid_map.shape)
         self.grid_mask_obstacle = grid_mask_obstacle
         self.grid_safe_mask_obstacle = self.safe_grid_mask_obstacle
 
@@ -180,7 +186,7 @@ class EnvMove:
         x, y = physical_coords[:, 0], physical_coords[:, 1]
         row = torch.round(self.H // 2 + y / self.__ratio).long()
         col = torch.round(x / self.__ratio + self.W // 2).long()
-        return torch.stack((row, col), dim=-1)
+        return torch.stack((col, row), dim=-1)
 
     def init_visual_grid(self):
         points = None
@@ -262,35 +268,41 @@ class EnvMove:
         r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
-            distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
+            # print("Shape of circle_center:", self.circle_center.shape)
+            # print("Shape of origins:", origins.shape)
+            # 将 origins 扩展为 (B, 1, 2)；circle_center 扩展为 (1, num_circles, 2)
+            distance = torch.norm(self.circle_center.unsqueeze(0)-origins.unsqueeze(1), dim=-1, keepdim=True)
             sign = (distance - r - self.circle_radius <  0)
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False)
 
         if len(self.map.line_array) != 0:
-            line = self.line.unsqueeze(0)   
+            line = self.line 
             d = line[..., 1, :] - line[..., 0, :]
-            f = line[..., 0, :] - origins
-            a = torch.sum(d * d, dim=-1)
-            b = 2 * torch.sum(f * d, dim=-1)
-            c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
+            # 计算 f = 线段起点 - origins，扩展为 (B, num_lines, 2)
+            f = line[..., 0, :].unsqueeze(0) - origins.unsqueeze(1)
+            a = torch.sum(d * d, dim=-1).unsqueeze(0)  # (1, num_lines)
+            b = 2 * torch.sum(f * d.unsqueeze(0), dim=-1)  # (B, num_lines)
+            # safe_radius.unsqueeze(1): (1, 1) 会广播至 (B, num_lines)
+            c = torch.sum(f * f, dim=-1) - r.squeeze(1) ** 2  # (B, num_lines)
             sign = (b**2 - 4*a*c) >= 0
             is_collision |= sign.any(dim=-1, keepdim=False) 
 
         if len(self.map.triangle_point_array) != 0:
+            # self.triangle_points: (num_triangles, 3, 2)
             triangle = self.triangle_points.unsqueeze(0)
-            A, B, C = triangle[..., 0, :], triangle[..., 1, :], triangle[..., 2, :]
-            v0, v1, v2 = C - A, B - A, origins - A
+            A, B, C = triangle[..., 0, :], triangle[..., 1, :], triangle[..., 2, :] # （1, num_triangles, 2）
+            v0, v1, v2 = C - A, B - A, origins.unsqueeze(1) - A # (1, num_triangles, 2)
 
-            dot00 = torch.sum(v0 * v0, dim=-1, keepdim=True)
-            dot01 = torch.sum(v0 * v1, dim=-1, keepdim=True)
-            dot02 = torch.sum(v0 * v2, dim=-1, keepdim=True)
-            dot11 = torch.sum(v1 * v1, dim=-1, keepdim=True)
-            dot12 = torch.sum(v1 * v2, dim=-1, keepdim=True)
+            dot00 = torch.sum(v0 * v0, dim=-1, keepdim=True)  # (1, num_triangles, 1)
+            dot01 = torch.sum(v0 * v1, dim=-1, keepdim=True)  # (1, num_triangles, 1)
+            dot02 = torch.sum(v0 * v2, dim=-1, keepdim=True)  # (num_points, num_triangles, 1)
+            dot11 = torch.sum(v1 * v1, dim=-1, keepdim=True)  # (1, num_triangles, 1)
+            dot12 = torch.sum(v1 * v2, dim=-1, keepdim=True)  # (num_points, num_triangles, 1)
 
             inv_denom = 1 / (dot00 * dot11 - dot01 * dot01)
             u = (dot11 * dot02 - dot01 * dot12) * inv_denom
             v = (dot00 * dot12 - dot01 * dot02) * inv_denom
-            w = 1 - u - v
+            w = 1 - u - v # (num_points, num_triangles, 1)
             
             sign = ((u >= 0) & (v >= 0) & (w >= 0)).squeeze(-1)
             is_collision |= sign.any(dim=-1, keepdim=False) 
@@ -438,7 +450,7 @@ class EnvMove:
         origins = self.agent.pos.unsqueeze(1)  # (batch_size, 1, 2)
         orientations = self.agent.ori_vector.unsqueeze(1)  # (batch_size, 1, 2)
         vector = points.unsqueeze(0) - origins  # (batch_size, num_points, 2)
-        # print(orientations.shape, vector.shape)
+        # print(self.agent.ori_vector.shape, orientations.shape, vector.shape)
         product = (orientations * vector).sum(dim=-1, keepdim=True)
         vector_norm = torch.norm(vector, dim=-1, keepdim=True)
         cos = product / (vector_norm + 1e-6)
@@ -580,7 +592,8 @@ class EnvMove:
 
         # 为每个智能体生成角加速度
         mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time
-        self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum(), 1), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
+        # print(self.agent.att_acc[mask_change].shape, ((torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc).shape)
+        self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
         self.agent.att_acc_timer[mask_change] = 0
 
         return
@@ -594,7 +607,7 @@ class EnvMove:
         idx_reset = torch.nonzero(mask_reset, as_tuple=True)[0]
         self.reset_idx(idx_reset)
 
-        return
+        return idx_reset
 
     def reset(self, change_map=False):
         if change_map:
@@ -604,7 +617,6 @@ class EnvMove:
         
         idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)
-
         return
 
     def reset_idx(self, idx):

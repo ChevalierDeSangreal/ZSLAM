@@ -33,8 +33,8 @@ def get_args():
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=200, help="Length of a sample")
-	parser.add_argument("--slide_size", type=int, default=40, help="Size of GRU input window")
+	parser.add_argument("--len_sample", type=int, default=100, help="Length of a sample")
+	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
 	
 	# model setting
 	parser.add_argument("--param_save_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth', help="The path to save model parameters")
@@ -122,10 +122,10 @@ if __name__ == "__main__":
 
 			loss.backward(retain_graph=True)
 
-			if step and not (step % args.slide_size):
-				optimizer.step()
-				optimizer.zero_grad()
-				h0 = h0.detach()
+			# if step and not (step % args.slide_size):
+			# 	optimizer.step()
+			# 	optimizer.zero_grad()
+			# 	h0 = h0.detach()
 		optimizer.step()
 		
 		ave_loss = sum_loss / args.len_sample

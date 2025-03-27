@@ -29,9 +29,9 @@ def get_args():
     parser.add_argument("--device", type=str, default="cuda:0", help="设备")
     parser.add_argument("--batch_size", type=int, default=1024, help="测试时的批量大小")
     parser.add_argument("--test_steps", nargs="+", type=int,
-                        default=[5, 7, 9, 12],
                         # default=[5, 7, 9, 10, 15, 20, 25, 27, 29, 30, 33, 35, 37],
                         # default=[1, 2, 5, 7, 9, 10, 15, 20, 25],
+                        default=[10, 30, 50, 70, 90, 110, 130, 150],
                         help="测试时需要评估的步数列表，要求单调递增")
     parser.add_argument("--output_dir", type=str,
                         default="/home/wangzimo/VTT/ZSLAM/test_runs",
@@ -153,48 +153,48 @@ def main():
     current_step = 0
     max_step = max(test_steps)
     h = None
+    with torch.no_grad():
+        # 在完整的步数递增过程中，按步模拟环境
+        while current_step < max_step:
+            # 在指定步数处采用多样本 step 检查结果
+            depth_obs, quad_angle_enc, training_points, gt_labels = envs.step(num_sample=num_samples)
+            gt_labels = gt_labels + 1  # 对齐训练时的标签处理
+            
+            current_step += 1
+            num_envs = args.batch_size
 
-    # 在完整的步数递增过程中，按步模拟环境
-    while current_step < max_step:
-        # 在指定步数处采用多样本 step 检查结果
-        depth_obs, quad_angle_enc, training_points, gt_labels = envs.step(num_sample=num_samples)
-        gt_labels = gt_labels + 1  # 对齐训练时的标签处理
-        
-        current_step += 1
-        num_envs = args.batch_size
+            # 扩展无人机朝向编码至多样本维度，并拼接深度观测
+            quad_angle_enc_exp = quad_angle_enc.unsqueeze(0).expand(num_samples, -1, -1)
+            model_input = torch.cat((depth_obs, quad_angle_enc_exp), dim=-1)
+            input_flat = model_input.view(num_samples * num_envs, -1)
+            training_points_flat = training_points.view(num_samples * num_envs, -1)
 
-        # 扩展无人机朝向编码至多样本维度，并拼接深度观测
-        quad_angle_enc_exp = quad_angle_enc.unsqueeze(0).expand(num_samples, -1, -1)
-        model_input = torch.cat((depth_obs, quad_angle_enc_exp), dim=-1)
-        input_flat = model_input.view(num_samples * num_envs, -1)
-        training_points_flat = training_points.view(num_samples * num_envs, -1)
+            output, h = model(input_flat, training_points_flat, h)
 
-        output, h = model(input_flat, training_points_flat, h)
+            if (current_step + 1) in test_steps:
+                # 修改预测处理逻辑
+                output = output.view(num_samples, num_envs, 3)
+                predictions = torch.argmax(output, dim=-1)
 
-        if (current_step + 1) in test_steps:
-            # 修改预测处理逻辑
-            output = output.view(num_samples, num_envs, 3)
-            predictions = torch.argmax(output, dim=-1)
+                # 计算准确率
+                total = gt_labels.numel()
+                correct = (predictions == gt_labels).sum().item()
+                avg_accuracy = correct / total
+                overall_accuracies[current_step] = avg_accuracy
+                print(f"Step {current_step}: Average Accuracy = {avg_accuracy*100:.2f}%")
 
-            # 计算准确率
-            total = gt_labels.numel()
-            correct = (predictions == gt_labels).sum().item()
-            avg_accuracy = correct / total
-            overall_accuracies[current_step] = avg_accuracy
-            print(f"Step {current_step}: Average Accuracy = {avg_accuracy*100:.2f}%")
-
-            # 对指定环境进行可视化
-            cam_angle = envs.quad_state[:, 0]  # 当前无人机朝向
-            visualize_samples_on_single_map(env=envs,
-                                            training_points=training_points,
-                                            gt_labels=gt_labels,
-                                            predictions=predictions,
-                                            depth_obs=depth_obs,
-                                            cam_angle=cam_angle,
-                                            fov=envs.fov,
-                                            step_count=current_step,
-                                            env_idx=7,
-                                            output_dir=args.output_dir)
+                # 对指定环境进行可视化
+                cam_angle = envs.quad_state[:, 0]  # 当前无人机朝向
+                visualize_samples_on_single_map(env=envs,
+                                                training_points=training_points,
+                                                gt_labels=gt_labels,
+                                                predictions=predictions,
+                                                depth_obs=depth_obs,
+                                                cam_angle=cam_angle,
+                                                fov=envs.fov,
+                                                step_count=current_step,
+                                                env_idx=0,
+                                                output_dir=args.output_dir)
 
     # 保存所有指定测试步数下的准确率到 YAML 文件
     os.makedirs(args.output_dir, exist_ok=True)

@@ -24,18 +24,19 @@ from model import *
 def get_args():
     parser = argparse.ArgumentParser(description="Test ZSLAModel")
     parser.add_argument("--param_load_path", type=str,
-                        default="/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth",
+                        default="/home/wangzimo/VTT/ZSLAM/param_saved/twodrotVer0_5e4_better.pth",
                         help="加载模型参数的路径")
     parser.add_argument("--device", type=str, default="cuda:0", help="设备")
     parser.add_argument("--batch_size", type=int, default=1024, help="测试时的批量大小")
     parser.add_argument("--test_steps", nargs="+", type=int,
-                        default=[5, 7, 9, 10, 15, 20, 25, 27, 29, 30, 33, 35, 37],
+                        default=[5, 7, 9, 12],
+                        # default=[5, 7, 9, 10, 15, 20, 25, 27, 29, 30, 33, 35, 37],
                         # default=[1, 2, 5, 7, 9, 10, 15, 20, 25],
                         help="测试时需要评估的步数列表，要求单调递增")
     parser.add_argument("--output_dir", type=str,
                         default="/home/wangzimo/VTT/ZSLAM/test_runs",
                         help="测试结果输出目录")
-    parser.add_argument("--num_samples", type=int, default=150,
+    parser.add_argument("--num_samples", type=int, default=2,
                         help="每个测试步数生成的样本数量")
     args = parser.parse_args()
     return args
@@ -47,8 +48,8 @@ def visualize_samples_on_single_map(env, training_points, gt_labels, predictions
     将所有样本的结果可视化在同一张地图上：
       - 绘制一次地图背景（安全区域和所有圆形组件）。
       - 对于每个样本，根据 ground truth 和预测结果：
-          * 预测正确：绿色；
-          * 预测错误：红色；
+          * 预测正确：使用不同的 ground truth 对应不同的颜色；
+          * 预测错误：显示红色；
       - 将训练点和对应的深度射线击中点均绘制在同一张地图上。
     """
     num_samples = training_points.shape[0]
@@ -68,15 +69,28 @@ def visualize_samples_on_single_map(env, training_points, gt_labels, predictions
         circle = plt.Circle((cx, cy), r, color='blue', fill=False)
         ax.add_artist(circle)
     
+    # 定义颜色列表，用于预测正确时不同的 ground truth
+    color_list = ['blue', 'green', 'orange', 'purple', 'brown', 'cyan', 'magenta']
+    # 用于生成图例：记录预测正确时每个 ground truth 的颜色
+    correct_gt_colors = {}
+    incorrect_found = False
+    
     # 遍历所有样本，根据预测正确性选用颜色
     for i in range(num_samples):
-        tp = training_points[i, env_idx].cpu().numpy()  # (cos(theta), sin(theta), distance)
+        # 训练点为 (cos(theta), sin(theta), distance)
+        tp = training_points[i, env_idx].cpu().numpy()  
         x_tp = tp[0] * tp[2]
         y_tp = tp[1] * tp[2]
         gt_val = gt_labels[i, env_idx].item()
         pred_val = predictions[i, env_idx].item()
         
-        color = "green" if pred_val == gt_val else "red"
+        if pred_val == gt_val:
+            # 根据 ground truth 选择颜色
+            color = color_list[int(gt_val) % len(color_list)]
+            correct_gt_colors[gt_val] = color
+        else:
+            color = "red"
+            incorrect_found = True
         
         # 绘制训练点
         ax.scatter([x_tp], [y_tp], color=color, s=100, marker='x')
@@ -92,12 +106,16 @@ def visualize_samples_on_single_map(env, training_points, gt_labels, predictions
         y_rays = depth * np.sin(ray_angles)
         ax.scatter(x_rays, y_rays, color=color, s=10, alpha=0.6)
     
-    # 添加图例说明
+    # 构造图例：对于预测正确的样本，每个不同的 ground truth 使用一种颜色；预测错误统一为红色
     from matplotlib.lines import Line2D
-    legend_elements = [
-        Line2D([0], [0], marker='x', color='w', label='Correct', markerfacecolor='green', markersize=10),
-        Line2D([0], [0], marker='x', color='w', label='Incorrect', markerfacecolor='red', markersize=10)
-    ]
+    legend_elements = []
+    for gt, col in sorted(correct_gt_colors.items()):
+        legend_elements.append(Line2D([0], [0], marker='x', color='w', label=f"Correct GT {gt}",
+                                      markerfacecolor=col, markersize=10))
+    if incorrect_found:
+        legend_elements.append(Line2D([0], [0], marker='x', color='w', label='Incorrect',
+                                      markerfacecolor='red', markersize=10))
+    
     ax.legend(handles=legend_elements, loc="upper right")
     
     plt.tight_layout()
@@ -106,6 +124,7 @@ def visualize_samples_on_single_map(env, training_points, gt_labels, predictions
     plt.savefig(save_path)
     plt.close(fig)
     print(f"Saved combined samples visualization to {save_path}")
+
 
 
 def main():

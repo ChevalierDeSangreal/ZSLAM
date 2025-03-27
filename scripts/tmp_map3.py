@@ -10,7 +10,7 @@ sys.path.append('/home/wangzimo/VTT/ZSLAM')
 from envs import EnvMove  # 请确保 env_move 模块在 Python 路径下
 from cfg import EnvMoveCfg
 
-def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, trajectory, output_path):
+def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, trajectory, output_path, desired_pos):
     """
     绘制环境的自由区域、障碍物、安全区域以及轨迹。
     """
@@ -35,6 +35,8 @@ def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, 
         # 轨迹终点（黄色）
         plt.scatter(trajectory[-1, 0], trajectory[-1, 1], c='yellow', s=50, marker='X', label='End')
 
+    plt.scatter(desired_pos[0], desired_pos[1], c='purple', s=50, marker='X', label='Desired Pos')
+
     plt.title("Map Grid and Trajectory Visualization")
     plt.xlabel("X")
     plt.ylabel("Y")
@@ -57,7 +59,7 @@ def set_seed(seed):
 
 
 if __name__ == '__main__':
-    # set_seed(42)
+    # set_seed(43)
     output_path = "/home/wangzimo/VTT/ZSLAM/output"
     
     # 初始化环境
@@ -77,7 +79,7 @@ if __name__ == '__main__':
     timer = 0
     while True:
         timer += 1
-        idx_reset = env.step()
+        idx_reset, desired_pos = env.step()
         pos = env.agent.pos[0].cpu().numpy()
         vel = env.agent.vel[0].cpu().numpy()
         acc = env.agent.acc[0].cpu().numpy()
@@ -88,5 +90,6 @@ if __name__ == '__main__':
             break
         list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点
 
+    # desired_pos = env.agent.desired_pos[0].cpu().numpy()
     # 可视化地图和轨迹
-    visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path)
+    visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path, desired_pos[0].cpu().numpy())

@@ -5,11 +5,11 @@ class AgentCfg:
     ori = None # 相机朝向角度（弧度制）
     field = math.pi*0.5 # 视场角（弧度制），必须在 (0, π) 之间
     w = 4 # 图像的像素宽度
-    safe_radius = 0.2 # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
+    safe_radius = 0.5 # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
     field_radius = 100. # 视场半径，默认为 100.0
 
     max_speed = 1.0 # 最大速度分量
-    max_acc = 0.5 # 最大加速度分量
+    max_acc = 1.5 # 最大加速度分量
     max_att_acc = math.pi / 3 # 最大角加速度，弧度
     max_att_speed = math.pi / 3 # 最大角速度，弧度
 

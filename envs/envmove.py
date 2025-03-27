@@ -70,6 +70,8 @@ class Agent:
         self.att_acc_timer = torch.zeros((batch_size,), dtype=torch.int, device=device) # 计时器，记录角加速度未变化的时间
         self.att_acc_change_time = torch.randint(agent_cfg.min_att_acc_change_step, agent_cfg.max_att_acc_change_step, (batch_size,), device=device) # 角加速度变化时间间隔
 
+        self.desired_pos = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
@@ -89,7 +91,7 @@ class Agent:
 
         self.att_acc_timer += 1
 
-    def reset_idx(self, idx, init_pos):
+    def reset_idx(self, idx, init_pos, desired_pos):
         num_reset = len(idx)
         # 随机初始化无人机初始位置和姿态
         self.ori[idx] = torch.rand((num_reset, ), dtype=torch.float, device=self.device) * 2 * math.pi
@@ -103,7 +105,8 @@ class Agent:
         self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device) * 2 - 1
         self.att_acc_timer[idx] = 0
         self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset,), device=self.device)
-    
+
+        self.desired_pos[idx] = desired_pos[idx]
     
 
         
@@ -254,7 +257,8 @@ class EnvMove:
         # r = torch.tensor([camera.safe_radius for camera in self.cameras], device=self.device).unsqueeze(-1).unsqueeze(-1)
         origins = self.agent.pos.unsqueeze(1)
         # print("??????????????", origins.shape)
-        r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
+        # r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
+        r = 0
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
             distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
@@ -482,7 +486,25 @@ class EnvMove:
         indices = torch.randint(low=0, high=num_safe_points, size=(self.batch_size,))
         # 根据索引从self.points_safe中选取对应的点作为初始位置
         return self.points_safe[indices]
-    
+
+
+    def generate_desire_pos(self, init_pos):
+        """
+        对于从 generate_safe_pos 生成的初始点，找到 self.points_safe 中距离其最远的点，
+        返回形状为 (batch_size, 2) 的张量。
+        """
+        
+        
+        # 计算 self.points_safe 中所有点到每个初始点的欧几里得距离
+        # 距离矩阵的形状为 (batch_size, num_safe_points)
+        dists = torch.cdist(init_pos, self.points_safe)
+        
+        # 对于每个初始点，找到距离最远的安全点的索引
+        max_indices = torch.argmax(dists, dim=1)
+        
+        # 选取对应的点作为目标点
+        return self.points_safe[max_indices]
+
     def get_nearest_obstacle_vector(self):
         """
         计算每个智能体到最近障碍物的距离向量。
@@ -566,39 +588,40 @@ class EnvMove:
     def update_acc_attacc(self):
         """
         为每个智能体生成当前时刻加速度和角加速度
-        由三个分量合并：指向未知的方向；指向最近障碍物反方向；随机偏好
+        由两个分量合并：
+        1. 从 agent.pos 指向 agent.desired_pos，模长为 sqrt(0.1 * max_acc)
+        2. obstacle_opp_vector，模长为 sqrt(2 * 0.5 * max_acc * safe_radius)
         """
+        max_acc = torch.tensor(self.cfg.agent_cfg.max_acc, device=self.device)
+        safe_radius = self.cfg.agent_cfg.safe_radius
+        
+        # 计算目标方向向量
+        direction_vector = self.agent.desired_pos - self.agent.pos  # (B, 2)
+        direction_norm = torch.norm(direction_vector, dim=1, keepdim=True) + 1e-8
+        normalized_direction_vector = direction_vector / direction_norm
+        
+        # 计算目标方向的加速度
+        acc_magnitude_goal = torch.sqrt(0.2 * max_acc)
+        acc_goal = normalized_direction_vector * acc_magnitude_goal  # (B, 2)
+        
+        # 计算障碍物反方向向量，并归一化
+        obstacle_opp_vector =  -self.get_nearest_obstacle_vector()  # (B, 2)
+        obstacle_distance = torch.norm(obstacle_opp_vector, dim=1, keepdim=True) + 1e-8
+        normalized_obstacle_opp_vector = obstacle_opp_vector / obstacle_distance
+        
+        # 计算避障加速度
+        acc_magnitude_obstacle = torch.sqrt(2 * max_acc * 1 * safe_radius)
+        avoid_obstacle_vector = normalized_obstacle_opp_vector * acc_magnitude_obstacle  # (B, 2)
 
-        invisible_direction = self.get_invisible_direction_vector()  # (B, 2)
-        nearest_obstacle_vector = self.get_nearest_obstacle_vector()  # (B, 2)
-        prefer_acc = self.agent.prefer_acc  # (B, 2)
+        # 在智能体到障碍物距离大于 safe_radius 时，将避障加速度设为 0
+        mask_safe = obstacle_distance > safe_radius
+        avoid_obstacle_vector[mask_safe.squeeze()] = 0
 
-        # 计算距离：nearest_obstacle_vector 的模长即为到障碍物的距离
-        distance = torch.norm(nearest_obstacle_vector, dim=1, keepdim=True)  # (B, 1)
-
-        # 定义一个小的常数以防除零
-        epsilon = 1e-8
-
-        # 计算权重：距离越小，权重越大
-        weight = 1 / (distance + epsilon)
-
-        # 获取障碍物反方向向量，并归一化（模长归一为1）
-        obstacle_opp_vector = -nearest_obstacle_vector  # (B, 2)
-        norm = distance + epsilon
-        normalized_obstacle_opp_vector = obstacle_opp_vector / norm
-
-        # 将归一化向量乘以权重，得到加速度分量，其模长随距离调整
-        avoid_obstacle_vector = normalized_obstacle_opp_vector * weight  # (B, 2)
-
-        print("--------------------")
-        print("Invisible direction:", invisible_direction[0])
-        print("Avoid obstacle vector:", avoid_obstacle_vector[0])
-        print("Prefer acceleration:", prefer_acc[0])
-        # 将三个方向的加速度分量合并
-        acc = invisible_direction + avoid_obstacle_vector + prefer_acc  # (B, 2)
-        # print("Acceleration:", acc[0])
-        self.agent.acc = torch.clamp(acc, min=-self.cfg.agent_cfg.max_acc, max=self.cfg.agent_cfg.max_acc)
-        # print("Acceleration:", self.agent.acc[0])
+        # 计算总加速度
+        
+        acc = acc_goal + avoid_obstacle_vector  # (B, 2)
+        print(acc_goal[0], avoid_obstacle_vector[0], acc[0])
+        self.agent.acc = torch.clamp(acc, min=-max_acc, max=max_acc)
 
         # 为每个智能体生成角加速度
         mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time
@@ -613,11 +636,13 @@ class EnvMove:
         self.agent.step()
         self.update_grid_mask_visible()
 
+        desired_pos = self.agent.desired_pos
+
         mask_reset = self.is_collision()
         idx_reset = torch.nonzero(mask_reset, as_tuple=True)[0]
         self.reset_idx(idx_reset)
 
-        return idx_reset
+        return idx_reset, desired_pos
 
     def reset(self, change_map=False):
         if change_map:
@@ -627,11 +652,12 @@ class EnvMove:
         
         idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)
-        return
+        return 
 
     def reset_idx(self, idx):
         if len(idx):
-            self.agent.reset_idx(idx, self.generate_safe_pos())
+            init_pos = self.generate_safe_pos()
+            self.agent.reset_idx(idx, init_pos, self.generate_desire_pos(init_pos))
             # 更新已知点mask
             self.grid_mask_visible[idx] = 0
             self.grid_visit_time[idx] = 0

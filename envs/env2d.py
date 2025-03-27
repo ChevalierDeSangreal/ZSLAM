@@ -192,7 +192,7 @@ class TwoDEnv():
         self.dt = 0.02
         self.num_rays = 64
 
-        self.max_ang_vel = math.radians(360)  # 60° 转换为弧度
+        self.max_ang_vel = math.radians(720)  # 60° 转换为弧度
 
         self.output_path = '/home/wangzimo/VTT/ZSLAM/output'
 

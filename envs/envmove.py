@@ -3,6 +3,7 @@ from map import Map
 from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back, trans_simple, trans_simple_back
 from utils import batch_theta_to_rotation_matrix, batch_theta_to_orientation_vector
+from utils import position_encode
 from typing import List
 import math
 from cfg import *
@@ -382,17 +383,31 @@ class EnvMove:
     
     def get_map_grid(self, map:Map):
         """
-        生成给定地图的网格坐标，并判断哪些点位于障碍物内部。
+            生成地图的网格坐标，并判断哪些点位于障碍物内部。
 
-        参数:
-            map (Map): 输入的地图对象，包含地图尺寸、分辨率及障碍物信息。
+            参数:
+                map (Map): 输入的地图对象，包含地图尺寸、分辨率及障碍物信息。
 
-        返回:
-            tuple: 
-                - grid[~mask] (Tensor): 自由空间中的网格坐标（未被障碍物占据的点）。
-                - grid[mask] (Tensor): 位于障碍物内部的网格坐标。
-                - mask (Tensor): 一个布尔掩码，指示每个网格点是否位于障碍物内。
-        """
+            返回:
+                tuple:
+                    - points (Tensor): 所有网格坐标点 (N, 2)。
+                    - points[~mask] (Tensor): 未被障碍物占据的自由空间网格坐标。
+                    - points[mask] (Tensor): 位于障碍物内部的网格坐标。
+                    - mask (Tensor): 布尔掩码，指示哪些网格点位于障碍物内。
+                    - grid (Tensor): 以地图坐标系表示的网格坐标，形状为 (W, H, 2)。
+                    - grid_mask (Tensor): 以地图坐标系表示的布尔掩码，形状为 (W, H)，标识障碍物区域。
+
+            过程:
+                1. 计算网格尺寸 (H, W) 并生成所有网格坐标点。
+                2. 初始化掩码 mask，标识是否位于障碍物内部。
+                3. 处理圆形障碍物：
+                - 计算网格点到所有圆心的欧几里得距离。
+                - 依据半径判断哪些点在圆形障碍物内，更新 mask。
+                4. 处理三角形障碍物：
+                - 计算点是否落在某个三角形内部，更新 mask。
+                5. 转换网格坐标到地图坐标系，并返回相关数据。
+
+            """
         ratio = map.ratio
         H, W = int(map.height/ratio), int(map.width/ratio)
         center = torch.tensor([W//2, H//2], dtype=torch.float32, device=self.device)
@@ -572,7 +587,7 @@ class EnvMove:
         down_desire = down_desire * (self.agent.pos[:, 0] + self.W // 2)
         right_desire = left_desire * (self.H // 2 - self.agent.pos[:, 1])
         left_desire = right_desire * (self.agent.pos[:, 1] + self.H // 2)
-        print(up_desire[0], down_desire[0], left_desire[0], right_desire[0])
+        # print(up_desire[0], down_desire[0], left_desire[0], right_desire[0])
 
         vertical   = up_desire - down_desire  # (B,)
         horizontal = right_desire - left_desire   # (B,)
@@ -599,6 +614,7 @@ class EnvMove:
         direction_vector = self.agent.desired_pos - self.agent.pos  # (B, 2)
         direction_norm = torch.norm(direction_vector, dim=1, keepdim=True) + 1e-8
         normalized_direction_vector = direction_vector / direction_norm
+        # print("Normalized direction vector:", normalized_direction_vector[0])
         
         # 计算目标方向的加速度
         acc_magnitude_goal = torch.sqrt(0.2 * max_acc)
@@ -620,7 +636,7 @@ class EnvMove:
         # 计算总加速度
         
         acc = acc_goal + avoid_obstacle_vector  # (B, 2)
-        print(acc_goal[0], avoid_obstacle_vector[0], acc[0])
+        # print(acc_goal[0], avoid_obstacle_vector[0], acc[0])
         self.agent.acc = torch.clamp(acc, min=-max_acc, max=max_acc)
 
         # 为每个智能体生成角加速度
@@ -630,6 +646,48 @@ class EnvMove:
         self.agent.att_acc_timer[mask_change] = 0
 
         return
+    
+    def get_desired_pos(self):
+        return self.agent.desired_pos
+    
+    def generate_ground_truth(self, square_size: int):
+        """
+        随机选取一个给定大小的正方形，根据 self.grid_mask_obstacle 和 self.grid_mask_visible，
+        并行计算并返回正方形中心点的位置坐标和正方形中每一个点是否可见可达的信息。
+
+        参数:
+            square_size (int): 正方形的边长。
+
+        返回:
+            center_coords (torch.Tensor): 正方形中心点的位置坐标，形状为 (B, 2)。
+            ground_truth (torch.Tensor): 每个正方形中点的可见可达信息，形状为 (B, square_size, square_size)。
+                                        0 表示不可见，1 表示可达，2 表示不可达。
+        """
+        B, H, W = self.batch_size, self.H, self.W
+        device = self.device
+
+        # 生成单个中心点坐标（所有 batch 共享）
+        center_x = torch.randint(low=square_size // 2, high=W - square_size // 2, size=(1,), device=device)
+        center_y = torch.randint(low=square_size // 2, high=H - square_size // 2, size=(1,), device=device)
+        center_coords = torch.stack([center_x, center_y], dim=1)  # (1, 2)
+
+        # 计算正方形区域的索引范围
+        x_start, x_end = center_x - square_size // 2, center_x + square_size // 2
+        y_start, y_end = center_y - square_size // 2, center_y + square_size // 2
+
+        # 直接切片访问正方形区域
+        visible_region = self.grid_mask_visible[:, y_start:y_end, x_start:x_end]  # (B, s, s)
+        obstacle_region = self.grid_mask_obstacle[:, y_start:y_end, x_start:x_end]  # (B, s, s)
+
+        # 计算 ground_truth
+        ground_truth = torch.zeros((B, square_size, square_size), dtype=torch.int, device=device)
+        ground_truth[(visible_region & ~obstacle_region)] = 1  # 可见且可达
+        ground_truth[(visible_region & obstacle_region)] = 2  # 可见但不可达
+
+        coords_encoded = position_encode(center_coords, device=device)
+
+        return coords_encoded, ground_truth
+        
 
     def step(self):
         self.update_acc_attacc()

@@ -59,17 +59,19 @@ def set_seed(seed):
 
 if __name__ == '__main__':
     # set_seed(43)
-    output_path = "./output/tmp_map3"
+    output_path = "./output/tmp_map4"
+    os.makedirs(output_path, exist_ok=True)
     
     # 初始化环境
     batch_size = 2
     resolution_ratio = 0
-    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cpu")
+    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cuda:0")
     
     # 获取环境网格数据
     free_points = env.points_no_obstacle.cpu().numpy()  # 自由网格点
     obstacle_points = env.points_obstacle.cpu().numpy()  # 障碍点
     safe_points = env.points_safe.cpu().numpy()  # 安全区域点
+    print(free_points.shape, obstacle_points.shape, safe_points.shape)
 
     # 轨迹记录
     env.reset()
@@ -82,13 +84,22 @@ if __name__ == '__main__':
         pos = env.agent.pos[0].cpu().numpy()
         vel = env.agent.vel[0].cpu().numpy()
         acc = env.agent.acc[0].cpu().numpy()
+
+        #imgs, _ = env.get_images(env.w_gt)
+        #print(imgs.shape)
         print(f"Step: {timer}, Pos: {pos}, Vel: {vel}, Acc: {acc}")
         # print(idx_reset)
-        if 0 in idx_reset or timer > 5000:
+        if 0 in idx_reset or timer > 500:
             print(f"Reset at {timer}")
             break
         list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点
-
     # desired_pos = env.agent.desired_pos[0].cpu().numpy()
     # 可视化地图和轨迹
     visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path, desired_pos[0].cpu().numpy())
+    v_map = env.grid_mask_visible[0].T
+    print(v_map.shape)
+    plt.imshow(v_map.cpu().numpy(), cmap="gray", interpolation="nearest")
+    plt.colorbar()
+    plt.title("Boolean Tensor Visualization")
+    plt.show()
+

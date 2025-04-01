@@ -19,3 +19,12 @@ def position_encode(position, device="cpu"):
     :return: 位置编码，形状为 (batch_size, 2)
     """
     return position.to(device)
+
+def attitude_encode(ori, device="cpu"):
+    """
+    姿态编码
+    :param ori: 姿态信息，形状为 (batch_size,)
+    :param device: 设备
+    :return: 姿态编码，形状为 (batch_size, 2)
+    """
+    return torch.stack([torch.sin(ori), torch.cos(ori)], dim=1).to(device)

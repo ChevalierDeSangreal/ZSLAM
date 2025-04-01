@@ -3,7 +3,7 @@ from map import Map
 from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back, trans_simple, trans_simple_back
 from utils import batch_theta_to_rotation_matrix, batch_theta_to_orientation_vector
-from utils import position_encode
+from utils import position_encode, pos_encode, attitude_encode
 from typing import List
 import math
 from cfg import *
@@ -684,6 +684,7 @@ class EnvMove:
         ground_truth[(visible_region & ~obstacle_region)] = 1  # 可见且可达
         ground_truth[(visible_region & obstacle_region)] = 2  # 可见但不可达
 
+        ground_truth = ground_truth.reshape(B, -1)
         coords_encoded = position_encode(center_coords, device=device)
 
         return coords_encoded, ground_truth
@@ -694,13 +695,22 @@ class EnvMove:
         self.agent.step()
         self.update_grid_mask_visible()
 
-        desired_pos = self.agent.desired_pos
 
         mask_reset = self.is_collision()
         idx_reset = torch.nonzero(mask_reset, as_tuple=True)[0]
         self.reset_idx(idx_reset)
 
-        return idx_reset, desired_pos
+        
+        gt_position_encode, gt = self.generate_ground_truth(self.cfg.agent_cfg.square_size)
+
+        step_output = {}
+        step_output["image"] = self.get_images()
+        step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, self.device)
+        step_output["gt_position_encode"] = gt_position_encode
+        step_output["gt"] = gt
+        step_output["idx_reset"] = idx_reset
+
+        return step_output
 
     def reset(self, change_map=False):
         if change_map:

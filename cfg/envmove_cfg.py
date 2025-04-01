@@ -4,7 +4,7 @@ class AgentCfg:
     f = math.sqrt(2.)*0.5 # 相机焦距
     ori = None # 相机朝向角度（弧度制）
     field = math.pi*0.5 # 视场角（弧度制），必须在 (0, π) 之间
-    w = 4 # 图像的像素宽度
+    w = 64 # 图像的像素宽度
     safe_radius = 0.5 # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
     field_radius = 100. # 视场半径，默认为 100.0
 
@@ -15,6 +15,8 @@ class AgentCfg:
 
     max_att_acc_change_step = 100 # 角加速度变化最大时间间隔, 单位为step
     min_att_acc_change_step = 10 # 角加速度变化最小时间间隔, 单位为step
+
+    square_size = 10 # gt图像的边长，单位为像素
 
 class MapCfg:
     width = 10. # 地图宽度

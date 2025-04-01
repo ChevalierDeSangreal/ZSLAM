@@ -15,7 +15,8 @@ import yaml
 import argparse
 
 import sys
-sys.path.append('/home/wangzimo/VTT/ZSLAM')
+base_path = '/home/wangzimo/VTT/ZSLAM'
+sys.path.append(base_path)
 
 from envs import *
 from model import *
@@ -33,12 +34,12 @@ def get_args():
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=100, help="Length of a sample")
+	parser.add_argument("--len_sample", type=int, default=500, help="Length of a sample")
 	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
 	
 	# model setting
-	parser.add_argument("--param_save_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param/twodrotVer0.pth', help="The path to save model parameters")
-	parser.add_argument("--param_load_path", type=str, default='/home/wangzimo/VTT/ZSLAM/param_saved/twodrotVer0_5e5_12k.pth', help="The path to load model parameters")
+	parser.add_argument("--param_save_name", type=str, default='movingVer0.pth', help="The path to save model parameters")
+	parser.add_argument("--param_load_name", type=str, default='movingVer0.pth', help="The path to load model parameters")
 	
 	args = parser.parse_args()
 
@@ -72,7 +73,7 @@ if __name__ == "__main__":
 	run_name = f"{args.task}__{args.experiment_name}__{args.seed}__{get_time()}"
 
 	# 保存参数文件
-	log_dir = os.path.join('/home/wangzimo/VTT/ZSLAM/runs/', run_name, "env.yaml")
+	log_dir = os.path.join(base_path, '/runs/', run_name, "env.yaml")
 	params = {
 		k: v for k, v in args._get_kwargs()
 	}
@@ -80,7 +81,11 @@ if __name__ == "__main__":
 	os.makedirs(save_dir, exist_ok=True)
 	dump_yaml(log_dir, params)
 
-	writer = SummaryWriter(f"/home/wangzimo/VTT/ZSLAM/runs/{run_name}")
+	writer_dir = os.path.join(base_path, '/runs/', run_name)
+	writer = SummaryWriter(writer_dir)
+
+	model_load_path = os.path.join(base_path, args.param_load_name)
+	model_save_path = os.path.join(base_path, args.param_save_name)
 
 	device = args.device
 	print("using device:", device)
@@ -91,11 +96,13 @@ if __name__ == "__main__":
 
 	envs = TwoDEnv(num_envs=args.batch_size, device=args.device)
 
-	model = ZSLAModel(input_dim=64+2, hidden_dim=64, output_dim=3, device=device)
-	# model.load_model(path=args.param_load_path, device=device)
+	model = ZSLAModelVer1(input_dim=68, hidden_dim=64, output_dim=100, device=device)
+	# model.load_model(path=model_load_path, device=device)
 
 	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
-	criterion = nn.CrossEntropyLoss()
+	criterion = nn.MSELoss(reduction='none')
+
+	no_reset_buf = torch.zeros(args.batch_size, device=device)
 	
 	for epoch in range(args.num_epoch):
 		print(f"Epoch {epoch} begin...")
@@ -103,38 +110,40 @@ if __name__ == "__main__":
 
 		h0 = None
 		envs.reset()
-		sum_loss = 0
+		sum_loss = torch.zeros(args.batch_size, device=device)
+		sum_ave_loss = 0
+		
 
 		for step in range(args.len_sample):
 
-			depth_obs, quad_angle_enc, training_points, gt_labels = envs.step()
+			step_output = envs.step()
 
-			gt_labels = gt_labels + 1
-
-			input_tmp = torch.cat((depth_obs, quad_angle_enc), dim=1)
-			output, h0 = model(input_tmp, training_points, h0)
+			input_tmp = torch.cat((step_output["image"], step_output["agent_pos_encode"]), dim=1)
+			output, h0 = model(input_tmp, step_output["gt_position_encode"], h0)
 			# print(output[0], gt_labels[0])
-			loss = criterion(output, gt_labels)
+			loss = criterion(output, step_output["gt"])
 
 
 			h0 = h0.clone()
+			h0[:, step_output["idx_reset"]] = 0
 			sum_loss += loss
 
-			loss.backward(retain_graph=True)
+			if (not (step + 1) % 50):
+				no_reset_buf = 0
+				no_reset_buf[step_output["idx_reset"]] = 1
+				sum_loss.backward(no_reset_buf)
+				optimizer.step()
+				optimizer.zero_grad()
+				h0 = h0.detach()
 
-			# if step and not (step % args.slide_size):
-			# 	optimizer.step()
-			# 	optimizer.zero_grad()
-			# 	h0 = h0.detach()
-		optimizer.step()
-		
-		ave_loss = sum_loss / args.len_sample
-		print("Ave Loss", ave_loss)
-		writer.add_scalar('Loss', ave_loss.item(), epoch)
+				sum_ave_loss += sum_loss.mean()
+
+		print("Sum Ave Loss", sum_ave_loss)
+		writer.add_scalar('Loss', sum_ave_loss.item(), epoch)
 
 		if not (epoch % 200) and epoch:
 			print("Saving Model...")
-			model.save_model(args.param_save_path)
+			model.save_model(model_save_path)
 
 	writer.close()
 	print("Training Complete!")

@@ -15,7 +15,7 @@ import yaml
 import argparse
 
 import sys
-base_path = '/home/wangzimo/VTT/ZSLAM'
+base_path = '/home/zim/VTT/ZSLAM'
 sys.path.append(base_path)
 
 from envs import *
@@ -73,7 +73,8 @@ if __name__ == "__main__":
 	run_name = f"{args.task}__{args.experiment_name}__{args.seed}__{get_time()}"
 
 	# 保存参数文件
-	log_dir = os.path.join(base_path, '/runs/', run_name, "env.yaml")
+	print(base_path)
+	log_dir = os.path.join(base_path, 'runs/', run_name, "env.yaml")
 	params = {
 		k: v for k, v in args._get_kwargs()
 	}
@@ -81,7 +82,7 @@ if __name__ == "__main__":
 	os.makedirs(save_dir, exist_ok=True)
 	dump_yaml(log_dir, params)
 
-	writer_dir = os.path.join(base_path, '/runs/', run_name)
+	writer_dir = os.path.join(base_path, 'runs/', run_name)
 	writer = SummaryWriter(writer_dir)
 
 	model_load_path = os.path.join(base_path, args.param_load_name)
@@ -94,7 +95,7 @@ if __name__ == "__main__":
 	np.random.seed(args.seed)
 	torch.manual_seed(args.seed)
 
-	envs = TwoDEnv(num_envs=args.batch_size, device=args.device)
+	envs = EnvMove(batch_size=args.batch_size, device=args.device)
 
 	model = ZSLAModelVer1(input_dim=68, hidden_dim=64, output_dim=100, device=device)
 	# model.load_model(path=model_load_path, device=device)
@@ -118,6 +119,7 @@ if __name__ == "__main__":
 
 			step_output = envs.step()
 
+			# print(step_output["image"].shape, step_output["agent_pos_encode"].shape, step_output["gt_position_encode"].shape)
 			input_tmp = torch.cat((step_output["image"], step_output["agent_pos_encode"]), dim=1)
 			output, h0 = model(input_tmp, step_output["gt_position_encode"], h0)
 			# print(output[0], gt_labels[0])

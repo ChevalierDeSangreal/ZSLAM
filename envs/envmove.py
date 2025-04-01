@@ -327,6 +327,9 @@ class EnvMove:
         v = torch.stack([orientations[..., 1], -orientations[..., 0]], dim=-1)
         v = f * field * v
         d = origins + f * orientations - v
+        print("Shape of d:", d.shape)
+        print("Shape of t:", t.unsqueeze(-1).shape)
+        print("Shape of v:", v.shape)
         pixels = d + t.unsqueeze(-1) * 2 * v
         return origins, pixels
     
@@ -675,9 +678,10 @@ class EnvMove:
         x_start, x_end = center_x - square_size // 2, center_x + square_size // 2
         y_start, y_end = center_y - square_size // 2, center_y + square_size // 2
 
+        # print(self.grid_mask_obstacle.shape, self.grid_mask_visible.shape)
         # 直接切片访问正方形区域
         visible_region = self.grid_mask_visible[:, y_start:y_end, x_start:x_end]  # (B, s, s)
-        obstacle_region = self.grid_mask_obstacle[:, y_start:y_end, x_start:x_end]  # (B, s, s)
+        obstacle_region = self.grid_mask_obstacle[y_start:y_end, x_start:x_end]  # (B, s, s)
 
         # 计算 ground_truth
         ground_truth = torch.zeros((B, square_size, square_size), dtype=torch.int, device=device)

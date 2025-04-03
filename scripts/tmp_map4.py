@@ -9,21 +9,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from envs import EnvMove  # 请确保 env_move 模块在 Python 路径下
 from cfg import EnvMoveCfg
 
-def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, trajectory, output_path, desired_pos):
+def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, trajectory, output_path, desired_pos, visible_points=None, is_legend=False):
     """
     绘制环境的自由区域、障碍物、安全区域以及轨迹。
     """
     plt.figure(figsize=(8, 8))
-    
     # 绘制自由点（蓝色）
     if free_points.shape[0] > 0:
         plt.scatter(free_points[:, 0], free_points[:, 1], s=1, c='blue', label='Free Points')
-    # 绘制障碍点（红色）
-    if obstacle_points.shape[0] > 0:
-        plt.scatter(obstacle_points[:, 0], obstacle_points[:, 1], s=1, c='red', label='Obstacle Points')
     # 绘制安全区域点（青色）
     if safe_points.shape[0] > 0:
         plt.scatter(safe_points[:, 0], safe_points[:, 1], s=1, c='cyan', label='Safe Points')
+
+    if visible_points is not None:
+    
+        if visible_points.shape[0] > 0:
+            plt.scatter(visible_points[:, 0], visible_points[:, 1], s=1, c='lightcyan', label='Visible Points')
+    # 绘制障碍点（红色）
+    if obstacle_points.shape[0] > 0:
+        plt.scatter(obstacle_points[:, 0], obstacle_points[:, 1], s=1, c='red', label='Obstacle Points')
 
     # 绘制轨迹（黑色折线）
     if len(trajectory) > 0:
@@ -39,7 +43,8 @@ def visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, 
     plt.title("Map Grid and Trajectory Visualization")
     plt.xlabel("X")
     plt.ylabel("Y")
-    plt.legend()
+    if is_legend:
+        plt.legend()
     plt.gca().set_aspect('equal', adjustable='box')
 
     # 保存图像
@@ -59,17 +64,19 @@ def set_seed(seed):
 
 if __name__ == '__main__':
     # set_seed(43)
-    output_path = "./output/tmp_map3"
+    output_path = "./output/tmp_map4"
+    os.makedirs(output_path, exist_ok=True)
     
     # 初始化环境
     batch_size = 2
     resolution_ratio = 0
-    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cpu")
+    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cuda:0")
     
     # 获取环境网格数据
     free_points = env.points_no_obstacle.cpu().numpy()  # 自由网格点
     obstacle_points = env.points_obstacle.cpu().numpy()  # 障碍点
     safe_points = env.points_safe.cpu().numpy()  # 安全区域点
+    print(free_points.shape, obstacle_points.shape, safe_points.shape)
 
     # 轨迹记录
     env.reset()
@@ -82,13 +89,25 @@ if __name__ == '__main__':
         pos = env.agent.pos[0].cpu().numpy()
         vel = env.agent.vel[0].cpu().numpy()
         acc = env.agent.acc[0].cpu().numpy()
+
+        #imgs, _ = env.get_images(env.w_gt)
+        #print(imgs.shape)
         print(f"Step: {timer}, Pos: {pos}, Vel: {vel}, Acc: {acc}")
         # print(idx_reset)
-        if 0 in idx_reset or timer > 5000:
+        if 0 in idx_reset or timer > 500:
             print(f"Reset at {timer}")
             break
         list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点
-
     # desired_pos = env.agent.desired_pos[0].cpu().numpy()
     # 可视化地图和轨迹
-    visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path, desired_pos[0].cpu().numpy())
+    v_point = env.points_all[env.points_visible[0]].cpu().numpy()
+    print(v_point.shape)
+    visualize_env_map_and_trajectory(free_points, obstacle_points, safe_points, list_pos, output_path, desired_pos[0].cpu().numpy(), visible_points=v_point, is_legend=False)
+    # v_map = env.grid_mask_visible[0].T
+    # print(.shape)
+    # plt.imshow(v_map.cpu().numpy(), cmap="gray", interpolation="nearest")
+    # plt.colorbar()
+    # plt.title("Boolean Tensor Visualization")
+    # plt.show()
+
+

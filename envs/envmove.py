@@ -153,11 +153,13 @@ class EnvMove:
     def init_grid(self):
         ratio = self.map.ratio
         self.__ratio = ratio
-
-        w_gt =  (2 * self.agent.field_radius * torch.tan(0.5 * self.agent.field)) / ratio + 1
-        self.w_gt = torch.ceil(w_gt).to(torch.int32).item()
         
         self.H, self.W = int(self.map.height/ratio), int(self.map.width/ratio)
+
+        w_gt =  (2 * self.agent.field_radius * torch.tan(0.5 * self.agent.field)) / ratio + 1
+        w_gt = torch.ceil(w_gt).to(torch.int32).item()
+        w_gt = min(w_gt, self.H + self.W)
+        self.w_gt = w_gt
         
         self.map_center = torch.tensor([self.W//2, self.H//2], dtype=torch.float32, device=self.device)
         if len(self.map.circle_center_array) != 0:
@@ -183,6 +185,7 @@ class EnvMove:
         self.grid_mask_obstacle = grid_mask_obstacle
         self.grid_safe_mask_obstacle = self.safe_grid_mask_obstacle
 
+        self.points_visible = torch.zeros(self.batch_size, self.W*self.H, dtype=torch.bool, device=self.device)
         self.grid_mask_visible = torch.zeros(self.batch_size, self.W, self.H, dtype=torch.bool, device=self.device)
         self.grid_visit_time = torch.zeros(size=(self.batch_size, self.W, self.H), dtype=torch.float32, device=self.device)
         
@@ -393,7 +396,7 @@ class EnvMove:
                 t[idx] = x[idx][..., 0]
                 t, _ = torch.min(t, dim=2)
                 img = torch.where((img<t), img, t)
-        # 返回 深度图，比例图（比例小于1则视为物体在成像平面和相机点之间）
+        # 返回 深度图， 成像线段上像素点实际坐标
         return d_norm * img, pixels
     
     def get_map_grid(self, map:Map):
@@ -412,8 +415,8 @@ class EnvMove:
         ratio = map.ratio
         H, W = int(map.height/ratio), int(map.width/ratio)
         center = torch.tensor([W//2, H//2], dtype=torch.float32, device=self.device)
-        y = torch.arange(H, device=self.device).view(H, 1).expand(H, W)
-        x = torch.arange(W, device=self.device).view(1, W).expand(H, W)
+        x = torch.arange(W, device=self.device).view(W, 1).expand(W, H)
+        y = torch.arange(H, device=self.device).view(1, H).expand(W, H)
         points = torch.stack([x, y], dim=-1).to(torch.float32).reshape(-1, 2)
         mask = torch.zeros(points.shape[0], dtype=torch.bool, device=self.device)
         
@@ -499,38 +502,46 @@ class EnvMove:
 
         mask[batch_idx, grid_x, grid_y] = True
 
-        return mask
+        return torch.flip(mask, dims=[1])
     
     def get_img_field(self):
-        origins = self.agent.pos.unsqueeze(1)
+        origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         B = origins.shape[0]
-        imgs, pixels = self.get_images(self.w_gt)
+        imgs, pixels = self.get_images(self.w_gt) # B, wgt  B, wgt, 2
         field_radius = self.agent.cfg.field_radius
         imgs = torch.where(imgs == float('inf'), field_radius, imgs)
-        points = self.points_all.clone().unsqueeze(0).expand(B, -1, -1) # 1, W*H, 2
-
-        v = origins - points
+        points = self.points_all.clone().unsqueeze(0).expand(B, -1, -1) # B, W*H, 2
+        #points = points.reshape(B, self.W, self.H, 2)
+        #points = torch.flip(points, dims=[2]) # B, W, H, 2
         
-        r = torch.norm(v, dim=-1)# + 1e-6
-        r = torch.where(r == 0, torch.tensor(1e-6, device=self.device), r)
-        alpha = torch.sum(v * self.agent.ori_vector.unsqueeze(1), dim=-1)
-        alpha /= r
-        Alpha = torch.cos(self.agent.field * 0.5)
-        mask = (alpha >= Alpha) & (r <= field_radius)
+        vp = pixels - origins
+        ap = torch.atan2(vp[..., 1], vp[..., 0]) # B, wgt
 
-        # points = points[mask]
-        # v = v[mask]
-        # r = r[mask]
+        vc = points - origins # B, W*H, 2
+        ac = torch.atan2(vc[..., 1], vc[..., 0]) # B, W*H
+        dc = torch.norm(vc, dim=-1) # B, W*H
+
+        r = torch.where(dc == 0, torch.tensor(1e-6, device=self.device), dc)
+        cosc = torch.sum(vc * self.agent.ori_vector.unsqueeze(1), dim=-1)
+        cosc /= r
+        cosA = torch.cos(self.agent.field * 0.5)
+        mask = (cosc >= cosA) & (r <= field_radius) # B, W*H
+
+        a_diff = torch.abs(ap.unsqueeze(2) - ac.unsqueeze(1))
+        pixel_idx = a_diff.argmin(dim=1) # B, W*H
+
+        depths = torch.gather(imgs, 1, pixel_idx) # B, W*H
+        mask &= (dc < depths)
+        
         #mask = mask.reshape(B, self.W, self.H)
-        mask = mask.reshape(B, self.H, self.W).transpose(1, 2)
+        #mask = torch.flip(mask, dims=[2]) # B, W, H, 2
+
         return mask
 
     def update_grid_mask_visible(self):
-        #idx = self.get_img_field()
-        delta_grid_mask_visible = self.get_img_field_()
-        #self.grid_mask_visible = delta_grid_mask_visible
-        self.grid_mask_visible = self.grid_mask_visible | delta_grid_mask_visible
-        #self.grid_mask_visible = self.grid_mask_visible & (~self.grid_mask_obstacle)
+        delta_point_mask_visible = self.get_img_field()
+        print(self.points_visible.shape, delta_point_mask_visible.shape)
+        self.points_visible |= delta_point_mask_visible
         pass
     
     def update_grid_mask_visible_(self):
@@ -540,7 +551,8 @@ class EnvMove:
 
         # print(self.grid_mask_visible.shape, delta_grid_mask_visible.shape)
         # 更新视野内的点
-        self.grid_mask_visible = self.grid_mask_visible | delta_grid_mask_visible
+        self.grid_mask_visible |= delta_grid_mask_visible
+        #self.grid_mask_visible = self.grid_mask_visible | delta_grid_mask_visible
 
         # 删除其中self.grid_mask_obstacle为True的点
         # B, W, H

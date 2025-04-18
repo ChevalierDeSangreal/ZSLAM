@@ -30,11 +30,11 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=5.6e-4, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-6, help="The learning rate of the optimizer")
+	parser.add_argument("--batch_size", type=int, default=2, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=500, help="Length of a sample")
+	parser.add_argument("--len_sample", type=int, default=60, help="Length of a sample")
 	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
 	
 	# model setting
@@ -67,7 +67,17 @@ def dump_yaml(file_path, data):
     with open(file_path, 'w') as f:
         yaml.safe_dump(data, f)
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # 如果使用 GPU，确保所有 CUDA 设备的随机性固定
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False  # 可能会降低某些情况下的性能，但保证了可复现性
+
 if __name__ == "__main__":
+	# 设置随机种子
+	set_seed(42)
 	torch.autograd.set_detect_anomaly(True)
 	args = get_args()
 	run_name = f"{args.task}__{args.experiment_name}__{args.seed}__{get_time()}"
@@ -85,8 +95,8 @@ if __name__ == "__main__":
 	writer_dir = os.path.join(base_path, 'runs/', run_name)
 	writer = SummaryWriter(writer_dir)
 
-	model_load_path = os.path.join(base_path, args.param_load_name)
-	model_save_path = os.path.join(base_path, args.param_save_name)
+	model_load_path = os.path.join(base_path, "param/", args.param_load_name)
+	model_save_path = os.path.join(base_path, "param/", args.param_save_name)
 
 	device = args.device
 	print("using device:", device)
@@ -116,29 +126,49 @@ if __name__ == "__main__":
 		
 
 		for step in range(args.len_sample):
-
+			print("step", step)
 			step_output = envs.step()
 
 			# print(step_output["image"].shape, step_output["agent_pos_encode"].shape, step_output["gt_position_encode"].shape)
+			# print(step_output["image"], step_output["agent_pos_encode"])
 			input_tmp = torch.cat((step_output["image"], step_output["agent_pos_encode"]), dim=1)
+			if torch.isnan(input_tmp).any():
+				print("NaN detected in intput")
+			if torch.isnan(step_output["gt_position_encode"]).any():
+				print("NaN detected in gt_position_encode")
+			# print("gt_position_encode", step_output["gt_position_encode"])
 			output, h0 = model(input_tmp, step_output["gt_position_encode"], h0)
 			# print(output[0], gt_labels[0])
-			loss = criterion(output, step_output["gt"])
+			# print("output shape", output.shape)
+			# print("gt shape", step_output["gt"].shape)
+			# print(type(output), type(step_output["gt"]))
+			loss = criterion(output.float(), step_output["gt"].float()).mean(dim=1)
+			if torch.isnan(output).any():
+				print(input_tmp)
+				print("NaN detected in output")
+				exit(0)
 
+			if torch.isnan(step_output["gt"]).any():
+				print("NaN detected in ground truth (gt)")
 
 			h0 = h0.clone()
 			h0[:, step_output["idx_reset"]] = 0
+			# print("loss shape", loss.shape)
+			# print("sum_loss shape", sum_loss.shape)
 			sum_loss += loss
 
 			if (not (step + 1) % 50):
-				no_reset_buf = 0
+				no_reset_buf *= 0
+				# print(type(no_reset_buf))
 				no_reset_buf[step_output["idx_reset"]] = 1
 				sum_loss.backward(no_reset_buf)
+				
 				optimizer.step()
 				optimizer.zero_grad()
 				h0 = h0.detach()
 
 				sum_ave_loss += sum_loss.mean()
+				sum_loss = torch.zeros(args.batch_size, device=device)
 
 		print("Sum Ave Loss", sum_ave_loss)
 		writer.add_scalar('Loss', sum_ave_loss.item(), epoch)

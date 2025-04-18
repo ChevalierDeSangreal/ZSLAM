@@ -76,6 +76,7 @@ class Agent:
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
+        print(self.pos[0])
         self.vel = self.vel + self.dt * self.acc
         self.vel = torch.clamp(self.vel, -self.cfg.max_speed, self.cfg.max_speed)
         # print("Before ori:", self.ori.shape)
@@ -398,7 +399,10 @@ class EnvMove:
                 t, _ = torch.min(t, dim=2)
                 img = torch.where((img<t), img, t)
         # 返回 深度图， 成像线段上像素点实际坐标
-        return d_norm * img, pixels
+        imgs = d_norm * img
+        imgs = torch.where(imgs == float('inf'), self.cfg.agent_cfg.field_radius, imgs)
+        
+        return imgs, pixels
     
     def get_map_grid(self, map:Map):
         """
@@ -520,12 +524,14 @@ class EnvMove:
         return torch.flip(mask, dims=[1])
     
     def get_img_field(self):
+        W, H = self.grid_map.shape[0], self.grid_map.shape[1]
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         B = origins.shape[0]
         imgs, pixels = self.get_images(self.w_gt) # B, wgt  B, wgt, 2
         field_radius = self.agent.cfg.field_radius
         imgs = torch.where(imgs == float('inf'), field_radius, imgs)
-        points = self.points_all.clone().unsqueeze(0).expand(B, -1, -1) # B, W*H, 2
+        # points = self.points_all.clone().unsqueeze(0).expand(B, -1, -1) # B, W*H, 2
+        points = self.grid_map.view(1, W * H, 2).repeat(B, 1, 1)
         #points = points.reshape(B, self.W, self.H, 2)
         #points = torch.flip(points, dims=[2]) # B, W, H, 2
         
@@ -550,14 +556,16 @@ class EnvMove:
         
         #mask = mask.reshape(B, self.W, self.H)
         #mask = torch.flip(mask, dims=[2]) # B, W, H, 2
-
-        return mask
+        mask_grid = mask.reshape(B, W, H)
+        mask_points = mask
+        return mask_points, mask_grid
 
     def update_grid_mask_visible(self):
-        delta_point_mask_visible = self.get_img_field()
-        print(self.points_visible.shape, delta_point_mask_visible.shape)
+        delta_point_mask_visible, delta_grid_mask_visible = self.get_img_field()
+        # print(self.points_visible.shape, delta_point_mask_visible.shape)
         self.points_visible |= delta_point_mask_visible
-        pass
+        self.grid_mask_visible |= delta_grid_mask_visible
+        return
     
     def update_grid_mask_visible_(self):
         # 获取当前视野范围内的网格点布尔张量
@@ -566,6 +574,7 @@ class EnvMove:
 
         # print(self.grid_mask_visible.shape, delta_grid_mask_visible.shape)
         # 更新视野内的点
+
         self.grid_mask_visible |= delta_grid_mask_visible
         #self.grid_mask_visible = self.grid_mask_visible | delta_grid_mask_visible
 
@@ -724,7 +733,9 @@ class EnvMove:
         # 为每个智能体生成角加速度
         mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time
         # print(self.agent.att_acc[mask_change].shape, ((torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc).shape)
+        # $$$$$ Do not change att_acc by now
         self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
+        self.agent.att_acc.zero_()
         self.agent.att_acc_timer[mask_change] = 0
 
         return
@@ -770,6 +781,7 @@ class EnvMove:
         ground_truth = ground_truth.reshape(B, -1)
         coords_encoded = position_encode(center_coords, device=device)
 
+        # print("ground_truth shape:", ground_truth.shape)
         return coords_encoded, ground_truth
         
 
@@ -788,7 +800,7 @@ class EnvMove:
         gt_position_encode, gt = self.generate_ground_truth(self.cfg.agent_cfg.square_size)
 
         step_output = {}
-        step_output["image"] = self.get_images()
+        step_output["image"], _ = self.get_images()
         step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, self.device)
         step_output["gt_position_encode"] = gt_position_encode
         step_output["gt"] = gt

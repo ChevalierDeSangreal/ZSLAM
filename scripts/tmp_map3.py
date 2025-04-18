@@ -79,7 +79,11 @@ if __name__ == '__main__':
     desired_pos = env.get_desired_pos()
     while True:
         timer += 1
-        idx_reset, _ = env.step()
+        step_output = env.step()
+        idx_reset = step_output["idx_reset"]
+        gt = step_output["gt"]
+        image = step_output["image"]
+
         pos = env.agent.pos[0].cpu().numpy()
         vel = env.agent.vel[0].cpu().numpy()
         acc = env.agent.acc[0].cpu().numpy()

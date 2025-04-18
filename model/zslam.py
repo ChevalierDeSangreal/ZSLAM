@@ -162,7 +162,10 @@ class ZSLAModelVer1(nn.Module):
         out_seq = out_seq.squeeze(1)  # [batch_size, hidden_dim]
         
         # 拼接 (hidden_state) 和 query，并进入 Decoder
-        out = self.decoder(torch.cat((out_seq, query), dim=1))  # [batch_size, output_dim]
+        # print("out_seq.shape", out_seq.shape)
+        # print("query.shape", query.shape)
+        query_repeat = query.repeat(out_seq.shape[0], 1)
+        out = self.decoder(torch.cat((out_seq, query_repeat), dim=1))  # [batch_size, output_dim]
         
         return out, new_h
 

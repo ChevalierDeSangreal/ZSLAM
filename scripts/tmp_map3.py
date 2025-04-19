@@ -58,8 +58,8 @@ def set_seed(seed):
 
 
 if __name__ == '__main__':
-    # set_seed(43)
-    output_path = "./output/tmp_map3"
+    # set_seed(45)
+    output_path = "/home/wangzimo/VTT/ZSLAM/output"
     
     # 初始化环境
     batch_size = 2
@@ -76,15 +76,21 @@ if __name__ == '__main__':
     list_pos = []
 
     timer = 0
+    desired_pos = env.get_desired_pos()
     while True:
         timer += 1
-        idx_reset, desired_pos = env.step()
+        step_output = env.step()
+        idx_reset = step_output["idx_reset"]
+        gt = step_output["gt"]
+        image = step_output["image"]
+
         pos = env.agent.pos[0].cpu().numpy()
         vel = env.agent.vel[0].cpu().numpy()
         acc = env.agent.acc[0].cpu().numpy()
-        print(f"Step: {timer}, Pos: {pos}, Vel: {vel}, Acc: {acc}")
+        if timer % 10 == 0:
+            print(f"Step: {timer}, Pos: {pos}, Vel: {vel}, Acc: {acc}")
         # print(idx_reset)
-        if 0 in idx_reset or timer > 5000:
+        if 0 in idx_reset or timer > 500:
             print(f"Reset at {timer}")
             break
         list_pos.append(env.agent.pos[0].cpu().numpy())  # 记录轨迹点

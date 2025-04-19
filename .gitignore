@@ -2,3 +2,5 @@ runs/
 param/
 output/
 test_runs/
+*.pyc
+__pycache__/

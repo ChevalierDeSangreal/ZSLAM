@@ -76,7 +76,7 @@ class Agent:
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
         self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
-        print(self.pos[0])
+        # print(self.pos[0])
         self.vel = self.vel + self.dt * self.acc
         self.vel = torch.clamp(self.vel, -self.cfg.max_speed, self.cfg.max_speed)
         # print("Before ori:", self.ori.shape)
@@ -749,7 +749,7 @@ class EnvMove:
         并行计算并返回正方形中心点的位置坐标和正方形中每一个点是否可见可达的信息。
 
         参数:
-            square_size (int): 正方形的边长。
+            square_size (int): 正方形的边长。单位为像素
 
         返回:
             center_coords (torch.Tensor): 正方形中心点的位置坐标，形状为 (B, 2)。

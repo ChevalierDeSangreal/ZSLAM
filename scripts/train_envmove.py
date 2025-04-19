@@ -15,7 +15,7 @@ import yaml
 import argparse
 
 import sys
-base_path = '/home/zim/VTT/ZSLAM'
+base_path = '/home/wangzimo/VTT/ZSLAM'
 sys.path.append(base_path)
 
 from envs import *
@@ -31,7 +31,7 @@ def get_args():
 	
 	# train setting
 	parser.add_argument("--learning_rate", type=float, default=5.6e-6, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=2, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
 	parser.add_argument("--len_sample", type=int, default=60, help="Length of a sample")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 	model = ZSLAModelVer1(input_dim=68, hidden_dim=64, output_dim=100, device=device)
 	# model.load_model(path=model_load_path, device=device)
 
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
+	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-4)
 	criterion = nn.MSELoss(reduction='none')
 
 	no_reset_buf = torch.zeros(args.batch_size, device=device)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 		
 
 		for step in range(args.len_sample):
-			print("step", step)
+			# print("step", step)
 			step_output = envs.step()
 
 			# print(step_output["image"].shape, step_output["agent_pos_encode"].shape, step_output["gt_position_encode"].shape)

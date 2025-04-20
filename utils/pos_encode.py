@@ -14,6 +14,7 @@ def pos_encode(position, ori, theta=0.1, device="cpu"):
     :return: 位置编码，形状为 (batch_size, 16)
     """
     assert position.shape[0] == ori.shape[0]
+
     p, a = position_encode(position, theta, device=device), attitude_encode(ori, device=device)
     return torch.cat([p, a], dim=1)
 

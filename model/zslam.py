@@ -116,12 +116,15 @@ class ZSLAModelVer1(nn.Module):
         input_dim=68,      # 每帧输入的维度 深度相机像素数64+位置编码2+角度编码2
         hidden_dim=64,     # GRU 的隐状态维度
         output_dim=100,      # 真值相片总像素数
+        num_classes=3,    # 分类问题类别数：3 (对应 0, 1, 2)
         device='cpu',
     ):
         super(ZSLAModelVer1, self).__init__()
         
         self.hidden_dim = hidden_dim  # 方便在 forward 里使用
         self.device = device  # 保存设备信息
+        self.output_dim = output_dim
+        self.num_classes = num_classes
 
         # 双层 GRU，batch_first=True 方便处理 (batch, seq, feature)
         self.gru = nn.GRU(input_size=input_dim, hidden_size=hidden_dim, batch_first=True, num_layers=2)
@@ -130,7 +133,7 @@ class ZSLAModelVer1(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(hidden_dim + 2, 64),
             nn.ReLU(),
-            nn.Linear(64, output_dim),
+            nn.Linear(64, output_dim * num_classes),
         )
 
         self.to(self.device)
@@ -166,7 +169,7 @@ class ZSLAModelVer1(nn.Module):
         # print("query.shape", query.shape)
         query_repeat = query.repeat(out_seq.shape[0], 1)
         out = self.decoder(torch.cat((out_seq, query_repeat), dim=1))  # [batch_size, output_dim]
-        
+        out = out.reshape(-1, self.output_dim, self.num_classes) # [batch_size, output_dim, num_classes]
         return out, new_h
 
     

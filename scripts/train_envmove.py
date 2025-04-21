@@ -107,13 +107,13 @@ if __name__ == "__main__":
 
 	envs = EnvMove(batch_size=args.batch_size, device=args.device)
 
-	model = ZSLAModelVer1(input_dim=68, hidden_dim=64, output_dim=100, device=device)
+	model = ZSLAModelVer1(input_dim=68, hidden_dim=64, output_dim=2500, device=device)
 	# model.load_model(path=model_load_path, device=device)
 
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-4)
-	criterion = nn.MSELoss(reduction='none')
+	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-6)
+	criterion = nn.CrossEntropyLoss(reduction='none')  # 每个像素独立损失
 
-	no_reset_buf = torch.zeros(args.batch_size, device=device)
+	no_reset_buf = torch.ones(args.batch_size, device=device)
 	
 	for epoch in range(args.num_epoch):
 		print(f"Epoch {epoch} begin...")
@@ -142,7 +142,9 @@ if __name__ == "__main__":
 			# print("output shape", output.shape)
 			# print("gt shape", step_output["gt"].shape)
 			# print(type(output), type(step_output["gt"]))
-			loss = criterion(output.float(), step_output["gt"].float()).mean(dim=1)
+			target = step_output["gt"].long()
+			loss = criterion(output.permute(0,2,1), target).mean(dim=1) # [batch_size]
+			# loss = criterion(output.float(), step_output["gt"].float()).mean(dim=1)
 			if torch.isnan(output).any():
 				print(input_tmp)
 				print("NaN detected in output")
@@ -157,18 +159,21 @@ if __name__ == "__main__":
 			# print("sum_loss shape", sum_loss.shape)
 			sum_loss += loss
 
-			if (not (step + 1) % 50):
-				no_reset_buf *= 0
-				# print(type(no_reset_buf))
-				no_reset_buf[step_output["idx_reset"]] = 1
-				sum_loss.backward(no_reset_buf)
-				
-				optimizer.step()
-				optimizer.zero_grad()
-				h0 = h0.detach()
+			# if (not (step + 1) % 2):
+			
+			# print(type(no_reset_buf))
+			# no_reset_buf[step_output["idx_reset"]] = 1
+			sum_loss.backward(no_reset_buf)
+			# no_reset_buf *= 0
+			
+			optimizer.step()
+			optimizer.zero_grad()
+			h0 = h0.detach()
 
-				sum_ave_loss += sum_loss.mean()
-				sum_loss = torch.zeros(args.batch_size, device=device)
+			sum_ave_loss += sum_loss.mean()
+			sum_loss = torch.zeros(args.batch_size, device=device)
+
+			envs.reset()
 
 		print("Sum Ave Loss", sum_ave_loss)
 		writer.add_scalar('Loss', sum_ave_loss.item(), epoch)

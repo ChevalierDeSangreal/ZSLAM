@@ -1,7 +1,7 @@
 import math
 
 class AgentCfg:
-    f = math.sqrt(2.)*0.5 # 相机焦距
+    f = math.sqrt(0.02)*0.5 # 相机焦距
     ori = None # 相机朝向角度（弧度制）
     field = math.pi*0.5 # 视场角（弧度制），必须在 (0, π) 之间
     w = 64 # 图像的像素宽度

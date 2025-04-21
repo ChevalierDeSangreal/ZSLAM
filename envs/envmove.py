@@ -353,6 +353,7 @@ class EnvMove:
         """
         origins, pixels = self.get_image_pixels(w) # origins: B, 1, 2 pixels: B, w, 2
         directions = pixels - origins # B, w, 2
+        #print()
         d_norm = torch.norm(directions, dim=-1, keepdim=False) # B, w
         img = None
         if len(self.map.circle_center_array) != 0:
@@ -382,11 +383,10 @@ class EnvMove:
             line = torch.stack(self.map.line_array).to(self.device) # N, 2, 2
             line = line.unsqueeze(0) # 1, N, 2, 2
             m, n = directions.shape[1], line.shape[1] # m, n = w, N
-            
             e = (line[..., 1, :] - line[..., 0, :]).unsqueeze(0).expand(self.batch_size, m, n, 2) # B, w, N, 2
             b = (line[..., 1, :] - origins).unsqueeze(1).expand(self.batch_size, m, n, 2) # B, w, N, 2
             A = torch.stack([directions.expand(self.batch_size, m, n, 2), e], dim=4) # B, w, N, 4
-            valid = torch.abs(torch.det(A)) >= 1e-6 # B, w
+            valid = torch.abs(torch.det(A)) > 0# B, w
             
             x = torch.full((self.batch_size, m, n, 2), float('inf'), device=self.device) # B, w, N, 2
             if valid.any():
@@ -401,6 +401,7 @@ class EnvMove:
         # 返回 深度图， 成像线段上像素点实际坐标
         imgs = d_norm * img
         imgs = torch.where(imgs == float('inf'), self.cfg.agent_cfg.field_radius, imgs)
+        print(imgs[0].shape)
         
         return imgs, pixels
     
@@ -475,54 +476,6 @@ class EnvMove:
         grid_mask = mask.reshape(W, H)
         return points, points[~mask], points[mask], mask, grid, grid_mask
     
-    def get_img_field_(self):
-        """
-        生成相机视野范围内的网格点布尔张量。
-
-        返回:
-            delta_grid_mask_visible (Tensor[batch_size, W, H]): 布尔张量，表示哪些网格点位于当前时刻相机的视野范围内。
-            True 表示在视野内，False 表示不在视野内。
-        """
-        imgs, pixels = self.get_images(self.w_gt)
-        imgs = torch.where(imgs == float('inf'), self.agent.cfg.field_radius, imgs)
-        
-        origins = self.agent.pos.unsqueeze(1)  # (batch_size, 1, 2)
-        pixels_dir = pixels - origins
-        pixels_dir /= torch.norm(pixels_dir, dim=-1, keepdim=True)
-        B = pixels_dir.shape[0]
-        delta = imgs.unsqueeze(-1) * pixels_dir
-        p_end = origins + delta
-        N = (imgs/self.__ratio).ceil().long() + 1
-        N_max = int(N.max().item())
-        
-        t = torch.linspace(0, 1, steps=N_max, device=self.device)
-        t = t.view(1, 1, N_max).expand(B, self.w_gt, N_max)
-        
-        sample_points = origins.unsqueeze(2) + t.unsqueeze(-1) * delta.unsqueeze(2) # batch_size, w_gt, N_max, 2
-        steps_range = torch.arange(N_max, device=self.device).view(1, 1, N_max).expand(B, self.w_gt, N_max)
-        valid_mask = steps_range < N.unsqueeze(-1)
-
-        
-        grid_coords = trans_simple(sample_points / self.__ratio, self.map_center).ceil().long()
-        grid_x = grid_coords[..., 0]
-        grid_y = grid_coords[..., 1]
-        in_bounds = (grid_x >= 0) & (grid_x < self.W) & (grid_y >= 0) & (grid_y < self.H)
-        valid_mask = valid_mask & in_bounds
-
-        mask = torch.zeros(B, self.W, self.H, dtype=torch.bool, device=self.device)
-        valid_mask = valid_mask.reshape(B, -1)
-        grid_x = grid_x.reshape(B, -1)
-        grid_y = grid_y.reshape(B, -1)
-        batch_idx = torch.arange(B, device=self.device).view(B, 1).expand_as(grid_x)
-
-        batch_idx = batch_idx[valid_mask]
-        grid_x = grid_x[valid_mask]
-        grid_y = grid_y[valid_mask]
-
-        mask[batch_idx, grid_x, grid_y] = True
-
-        return torch.flip(mask, dims=[1])
-    
     def get_img_field(self):
         W, H = self.grid_map.shape[0], self.grid_map.shape[1]
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
@@ -552,7 +505,9 @@ class EnvMove:
         pixel_idx = a_diff.argmin(dim=1) # B, W*H
 
         depths = torch.gather(imgs, 1, pixel_idx) # B, W*H
-        mask &= (dc < depths)
+        
+        k = 1.5
+        mask &= (dc <= (depths + k * self.__ratio))
         
         #mask = mask.reshape(B, self.W, self.H)
         #mask = torch.flip(mask, dims=[2]) # B, W, H, 2
@@ -801,7 +756,7 @@ class EnvMove:
 
         step_output = {}
         step_output["image"], _ = self.get_images()
-        step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, self.device)
+        step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device)
         step_output["gt_position_encode"] = gt_position_encode
         step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset

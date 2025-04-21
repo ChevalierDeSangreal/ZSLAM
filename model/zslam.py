@@ -97,7 +97,7 @@ def example_usage():
         # 单步 forward
         out, h = model(x_t, h)
         
-        print(f"Frame {t} output shape: {out.shape}")
+        # print(f"Frame {t} output shape: {out.shape}")
         # out.shape -> [2, 3]
         # h -> [1, batch_size=2, hidden_dim=64]  (留给下一帧使用)
     
@@ -113,9 +113,9 @@ class ZSLAModelVer1(nn.Module):
     """
     def __init__(
         self,
-        input_dim=68,      # 每帧输入的维度 深度相机像素数64+位置编码2+角度编码2
+        input_dim=80,      # 每帧输入的维度 深度相机像素数64+位置编码12+角度编码4
         hidden_dim=64,     # GRU 的隐状态维度
-        output_dim=100,      # 真值相片总像素数
+        output_dim=50,      # 真值相片总像素数
         num_classes=3,    # 分类问题类别数：3 (对应 0, 1, 2)
         device='cpu',
     ):
@@ -131,7 +131,7 @@ class ZSLAModelVer1(nn.Module):
         
         # Decoder: (h) -> 输出
         self.decoder = nn.Sequential(
-            nn.Linear(hidden_dim + 2, 64),
+            nn.Linear(hidden_dim + 12, 64),
             nn.ReLU(),
             nn.Linear(64, output_dim * num_classes),
         )

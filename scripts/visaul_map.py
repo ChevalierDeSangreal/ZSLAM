@@ -134,7 +134,7 @@ def visualize_visible_mask_on_grid(grid, mask, output_path, prefix="visible_mask
 
 if __name__ == '__main__':
     # set_seed(418)
-    output_path = "/home/zim/VTT/ZSLAM/output"
+    output_path = "/home/wangzimo/VTT/ZSLAM/output"
 
     batch_size = 2
     resolution_ratio = 0

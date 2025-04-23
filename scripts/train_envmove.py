@@ -30,11 +30,11 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=5.6e-6, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=512, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-4, help="The learning rate of the optimizer")
+	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=60, help="Length of a sample")
+	parser.add_argument("--len_sample", type=int, default=50, help="Length of a sample")
 	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
 	
 	# model setting
@@ -107,10 +107,10 @@ if __name__ == "__main__":
 
 	envs = EnvMove(batch_size=args.batch_size, device=args.device)
 
-	model = ZSLAModelVer1(input_dim=80, hidden_dim=64, output_dim=2500, device=device)
+	model = ZSLAModelVer1(input_dim=64 + 12 + 4, hidden_dim=64, output_dim=1600, device=device)
 	# model.load_model(path=model_load_path, device=device)
 
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-6)
+	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 	criterion = nn.CrossEntropyLoss(reduction='none')  # 每个像素独立损失
 
 	no_reset_buf = torch.ones(args.batch_size, device=device)
@@ -159,7 +159,7 @@ if __name__ == "__main__":
 			# print("sum_loss shape", sum_loss.shape)
 			sum_loss += loss
 
-			if (not (step + 1) % 50):
+			if (not (step + 1) % 50) or 1:
 			
 				# print(type(no_reset_buf))
 				# no_reset_buf[step_output["idx_reset"]] = 1

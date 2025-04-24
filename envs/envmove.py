@@ -401,7 +401,7 @@ class EnvMove:
         # 返回 深度图， 成像线段上像素点实际坐标
         imgs = d_norm * img
         imgs = torch.where(imgs == float('inf'), self.cfg.agent_cfg.field_radius, imgs)
-        print(imgs[0].shape)
+        # print(imgs[0].shape)
         
         return imgs, pixels
     

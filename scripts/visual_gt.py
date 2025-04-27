@@ -165,13 +165,13 @@ def visualize_visible_mask_on_grid(grid, mask, output_path, prefix="visible_mask
     plt.close()
 
 if __name__ == '__main__':
-    set_seed(412)
-    # set_seed(4212)
-    output_path = "/home/wangzimo/VTT/ZSLAM/output"
+    # set_seed(412)
+    set_seed(42)
+    output_path = "./output/visual_gt"
 
     batch_size = 2
     resolution_ratio = 0
-    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cpu")
+    env = EnvMove(batch_size=batch_size, resolution_ratio=resolution_ratio, device="cuda:0")
 
     free_points = env.points_no_obstacle.cpu().numpy()
     obstacle_points = env.points_obstacle.cpu().numpy()

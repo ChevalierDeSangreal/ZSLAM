@@ -163,6 +163,11 @@ class EnvMove:
         w_gt = min(w_gt, self.H + self.W)
         self.w_gt = w_gt
         
+        n_theta = int(2 * math.pi * self.agent.field_radius / ratio)
+        n_theta = min(n_theta, 2 * (self.W + self.H))
+        self.n_theta = n_theta
+        print(self.n_theta)
+
         self.map_center = torch.tensor([self.W//2, self.H//2], dtype=torch.float32, device=self.device)
         if len(self.map.circle_center_array) != 0:
             self.circle_center = torch.stack(self.map.circle_center_array).to(self.device)
@@ -265,14 +270,13 @@ class EnvMove:
         _, safe_points, _, _, _, safe_grid_mask = self.get_map_grid(safe_map)
         return safe_points, safe_grid_mask
 
-
     def is_collision(self):
         # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
         # r = torch.tensor([camera.safe_radius for camera in self.cameras], device=self.device).unsqueeze(-1).unsqueeze(-1)
         origins = self.agent.pos.unsqueeze(1)
         # print("??????????????", origins.shape)
-        # r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
-        r = 0
+        r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
+        # r = 0
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
         if len(self.map.circle_center_array) != 0:
             distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
@@ -324,7 +328,7 @@ class EnvMove:
             is_collision |= sign.any(dim=-1, keepdim=False) 
         
         return is_collision
-
+    
     def get_image_pixels(self, w:int=None):
         """
         w(int): 输入为相机分辨率w，默认为agent的分辨率
@@ -505,9 +509,8 @@ class EnvMove:
         pixel_idx = a_diff.argmin(dim=1) # B, W*H
 
         depths = torch.gather(imgs, 1, pixel_idx) # B, W*H
-        
-        k = 1.5
-        mask &= (dc <= (depths + k * self.__ratio))
+
+        mask &= (dc <= depths)
         
         #mask = mask.reshape(B, self.W, self.H)
         #mask = torch.flip(mask, dims=[2]) # B, W, H, 2
@@ -698,6 +701,88 @@ class EnvMove:
     def get_desired_pos(self):
         return self.agent.desired_pos
     
+    def get_rand_visible_points(self, N:int):
+        """
+        作用是从每个Batch中采样N个visible的点
+        返回一个shape为3,B,N的tensor indices
+        indices[0], indices[1], indices[2] 分别代表 batch_idx, x, y
+        用例:
+        points = self.grid_map.repeat(B, 1, 1, 1)
+        v = points[indices[0], indices[1], indices[2], :]
+        返回抽样点的物理坐标
+        测试方法:
+        v = self.grid_mask_visible[indices[0], indices[1], indices[2]]
+        print(torch.all(v).item())
+        """
+        assert N > 0, 'error number'
+        W, H, B = self.W, self.H, self.batch_size
+        mask = self.grid_mask_visible.view(B, -1)
+        K = mask.sum(dim=1, keepdim=True)
+        probs = mask.float() / K
+        idx = torch.multinomial(probs, N, replacement=False)
+        x = idx // H
+        y = idx % H
+        batch_idx = torch.arange(B).view(-1, 1).expand(-1, N).to(self.device)
+        indices = torch.stack([batch_idx, x, y])
+        return indices
+    
+    def get_local_visible_boundary(self, N: int=20):
+        """
+        角度均匀采样，idx shape为B,2代表每个batch选出N个点的index，配合batch_idx可直接采点，见函数末尾注释用例
+        """
+        W, H, B = self.W, self.H, self.batch_size
+
+        points = self.grid_map.unsqueeze(0) # 1, H, W, 2
+        origins = self.agent.pos.unsqueeze(1).unsqueeze(1) # B, 1, 1, 2
+
+        dp = points - origins
+        dx, dy = dp[..., 0], dp[..., 1]
+        d = dx**2 + dy**2 # B, H, W
+        d = d.unsqueeze(1).expand(-1, N, -1, -1) # B, N, H, W
+        
+        theta = torch.atan2(dy.float(), dx.float()) # B, H, W
+        theta = (theta + 2 * torch.pi) % (2 * torch.pi) # B, H, W
+
+        n = (theta / (2 * torch.pi / N)).long() % N # B, H, W
+        dir_mask = (n.unsqueeze(1) == torch.arange(N, device=self.device).view(1, N, 1, 1))
+        
+        invisible_mask = ~self.grid_mask_visible.unsqueeze(1)
+        valid_mask = dir_mask & invisible_mask
+
+        d_masked = torch.where(valid_mask, d, torch.tensor(float('inf'), device=self.device))
+        min_d, flat_indices = torch.min(d_masked.view(B, N, -1), dim=2)
+        
+        x = flat_indices // W
+        y = flat_indices % W
+
+        batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+        idx = torch.stack([x, y], dim=-1)
+        # 这块代码用来判断边界点是未知还是障碍物
+        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+        # r, c = idx[..., 0], idx[..., 1]
+        # gmo = self.grid_mask_obstacle.unsqueeze(0).expand(2, W, H)
+        # v = gmo[batch_idx, r, c]
+        # print(v)
+
+        # 这块代码用来判断选到的点是否都是未知点
+        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+        # r, c = idx[..., 0], idx[..., 1]
+        # v = self.grid_mask_visible[batch_idx, r, c]
+        # print(v)
+
+        #print(idx.shape)
+        return batch_idx, idx
+
+    def generate_local_ground_truth(self, N:int):
+        assert N > 0, "num error"
+        batch_idx, idx = self.get_local_visible_boundary(N=N)
+        r, c = idx[..., 0], idx[..., 1]
+        gmo = self.grid_mask_obstacle.unsqueeze(0).expand(2, self.W, self.H)
+        
+        v = gmo[batch_idx, r, c]
+        return v, batch_idx, idx
+        
+    
     def generate_ground_truth(self, square_size: int):
         """
         随机选取一个给定大小的正方形，根据 self.grid_mask_obstacle 和 self.grid_mask_visible，
@@ -760,6 +845,8 @@ class EnvMove:
         step_output["gt_position_encode"] = gt_position_encode
         step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset
+
+        _, _ = self.get_local_visible_boundary(N=40)
 
         return step_output
 

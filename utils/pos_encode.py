@@ -47,4 +47,3 @@ if __name__ == '__main__':
     print(position_encode(position).shape)
     poe = pos_encode(position, ori, device="cpu")
     print(poe.shape)
-    

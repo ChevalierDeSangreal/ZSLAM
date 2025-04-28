@@ -16,7 +16,8 @@ class AgentCfg:
     max_att_acc_change_step = 100 # 角加速度变化最大时间间隔, 单位为step
     min_att_acc_change_step = 10 # 角加速度变化最小时间间隔, 单位为step
 
-    square_size = 40 # gt图像的边长，单位为像素
+    global_quary_square_size = 40 # global gt图像的边长，单位为像素
+    local_query_num = 10 # local gt 查询的个数
 
 class MapCfg:
     width = 5. # 地图宽度

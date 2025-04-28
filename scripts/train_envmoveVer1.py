@@ -36,11 +36,11 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=1.6e-4, help="The learning rate of the optimizer")
+	parser.add_argument("--learning_rate", type=float, default=1.6e-5, help="The learning rate of the optimizer")
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=15, help="Length of a sample")
+	parser.add_argument("--len_sample", type=int, default=5, help="Length of a sample")
 	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
 	
 	# model setting

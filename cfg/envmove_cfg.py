@@ -3,7 +3,7 @@ import math
 class AgentCfg:
     f = 0.05 # 相机焦距
     ori = None # 相机朝向角度（弧度制）
-    field = math.pi*0.5 # 视场角（弧度制），必须在 (0, π) 之间
+    field = math.pi / 3 # 视场角（弧度制），必须在 (0, π) 之间
     w = 64 # 图像的像素宽度
     safe_radius = f / math.sin(0.5 * field) # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
     field_radius = 10. # 视场半径，默认为 100.0，单位为m

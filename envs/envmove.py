@@ -360,17 +360,16 @@ class EnvMove:
         #print()
         d_norm = torch.norm(directions, dim=-1, keepdim=False) # B, w
         img = None
+        directions = directions.unsqueeze(2) # B, w, 1, 2
         if len(self.map.circle_center_array) != 0:
             circle_center = self.circle_center.unsqueeze(0) # 1, M, 2
             circle_radius = self.circle_radius.unsqueeze(0) # 1, M, 1
 
-            directions = directions.unsqueeze(2) # B, w, 1, 2
             delta = (origins - circle_center).unsqueeze(1) # B, 1, M, 2
             
             a = (directions ** 2).sum(dim=-1, keepdim=True) # B, w, 1, 1
             b = 2 * (directions * delta).sum(dim=-1, keepdim=True) # B, w, M, 1
             c = (delta ** 2).sum(dim=-1, keepdim=True) - circle_radius ** 2 # B, w, M, 1
-            directions = directions.squeeze(1) # B, w, 2
             
             discriminant = b ** 2 - 4 * a * c # B, w, M, 1
             valid = discriminant >= 0 # B, w, M, 1
@@ -382,11 +381,16 @@ class EnvMove:
             t = torch.where((t1 >= 0) & valid, t1, t2) # B, w, M, 1
             t = torch.where(valid & (t >= 0), t, torch.tensor(float('inf'), device=self.device)) # B, w, M, 1
             img, _ = torch.min(t.squeeze(-1), dim=-1) # B, w
+        directions = directions.squeeze(1) # B, w, 2
 
         if len(self.map.line_array) != 0:
             line = torch.stack(self.map.line_array).to(self.device) # N, 2, 2
             line = line.unsqueeze(0) # 1, N, 2, 2
             m, n = directions.shape[1], line.shape[1] # m, n = w, N
+            if img is None:
+                img = torch.full((self.batch_size, m), float('inf'), device=self.device) 
+            # print(f"m:{m}, n:{n}")
+            # print("Shape of direction", directions.shape)
             e = (line[..., 1, :] - line[..., 0, :]).unsqueeze(0).expand(self.batch_size, m, n, 2) # B, w, N, 2
             b = (line[..., 1, :] - origins).unsqueeze(1).expand(self.batch_size, m, n, 2) # B, w, N, 2
             A = torch.stack([directions.expand(self.batch_size, m, n, 2), e], dim=4) # B, w, N, 4

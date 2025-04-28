@@ -774,13 +774,54 @@ class EnvMove:
         return batch_idx, idx
 
     def generate_local_ground_truth(self, N:int):
+        """
+            param:
+                N (int): 采样点数目
+
+            return:
+                dict:
+                    - batch_idx, row_idx, col_idx (Tensor): 用来在shape为B,W,H,...中的tensor里采样
+                    - is_obstacle (Tensor): 未被障碍物占据的自由空间网格坐标。
+                    - coord (Tensor): 采样点物理坐标
+                    - dist (Tensor): 采样点相对距离的平方
+                    - theta (Tensor): 采样点相对方向
+                    - attitude_encode (Tensor): 采样点相对方向编码
+                    
+            "batch_idx": batch_idx, # B, N
+            "row_idx": r, # B, N
+            "col_idx": c, # B, N
+            "is_obstacle": v, # B, N
+            "coord": coord, # B, N, 2
+            "dist": dist, # B, N
+            "ori": ori, # B, N
+            "attitude_encode": att_encode # B, N, 4 
+
+        """
         assert N > 0, "num error"
         batch_idx, idx = self.get_local_visible_boundary(N=N)
         r, c = idx[..., 0], idx[..., 1]
-        gmo = self.grid_mask_obstacle.unsqueeze(0).expand(2, self.W, self.H)
+        gmo = self.grid_mask_obstacle.unsqueeze(0).expand(self.batch_size, self.W, self.H)
         
         v = gmo[batch_idx, r, c]
-        return v, batch_idx, idx
+
+        origins = self.agent.pos.unsqueeze(1) # B, 1, 2
+        coord = self.grid_map.unsqueeze(0).expand(self.batch_size, self.W, self.H, 2) # B, W, H, 2
+
+        coord = coord[batch_idx, r, c, :] - origins # B, N, 2
+        dx, dy = coord[..., 0], coord[..., 1]
+        dist = dx**2 + dy**2 # B, N
+        ori = torch.atan2(dy.float(), dx.float()) # B, N
+        att_encode = attitude_encode(ori.reshape(-1), device=self.device).reshape(self.batch_size, N, -1)
+        return {
+            "batch_idx": batch_idx, # B, N
+            "row_idx": r, # B, N
+            "col_idx": c, # B, N
+            "is_obstacle": v, # B, N
+            "coord": coord, # B, N, 2
+            "dist": dist, # B, N
+            "ori": ori, # B, N
+            "attitude_encode": att_encode # B, N, 4 
+        }
         
     
     def generate_ground_truth(self, square_size: int):
@@ -846,7 +887,8 @@ class EnvMove:
         step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset
 
-        _, _ = self.get_local_visible_boundary(N=40)
+        #_, _ = self.get_local_visible_boundary(N=40)
+        _ = self.generate_local_ground_truth(N=40)
 
         return step_output
 

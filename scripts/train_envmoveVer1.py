@@ -36,8 +36,8 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=5.6e-4, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=4, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--learning_rate", type=float, default=1.6e-4, help="The learning rate of the optimizer")
+	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
 	parser.add_argument("--len_sample", type=int, default=15, help="Length of a sample")
@@ -134,22 +134,22 @@ if __name__ == "__main__":
 			# print("step", step)
 			step_output = envs.step()
 
-			image = step_output["image"]
-			agent_pos = step_output["agent_pos_encode"]
+			image = step_output["image"].detach()
+			agent_pos = step_output["agent_pos_encode"].detach()
 			gt = step_output["gt"]
 			idx_reset = step_output["idx_reset"]
 
-			output_local_distance, output_local_class, output_global_exprate = model(image, agent_pos, gt["local_query_encode"], gt["global_query_encode"])
+			output_local_distance, output_local_class, output_global_exprate = model(image, agent_pos, gt["local_query_encode"].detach(), gt["global_query_encode"].detach())
 
 			# print("shape of output_local_distance", output_local_distance.shape)
 			# print("shape of gt_local_distance", gt["local_gt_distance"].shape)
-			loss_local_distance = criterion_mse(output_local_distance, gt["local_gt_distance"])
+			loss_local_distance = criterion_mse(output_local_distance, gt["local_gt_distance"].detach())
 			# print("shape of output_local_class", output_local_class.shape)
 			# print("shape of gt_local_obstacle", gt["local_gt_obstacle"].shape)
-			loss_local_class = criterion_ce(output_local_class.permute(0, 2, 1), gt["local_gt_obstacle"])
+			loss_local_class = criterion_ce(output_local_class.permute(0, 2, 1), gt["local_gt_obstacle"].detach())
 			# print("shape of output_global_exprate", output_global_exprate.shape)
 			# print("shape of gt_global_exprate", gt["global_explrate"].shape)
-			loss_global_exprate = criterion_mse(output_global_exprate, gt["global_explrate"])
+			loss_global_exprate = criterion_mse(output_global_exprate, gt["global_explrate"].detach())
 			
 
 			loss_total = loss_local_distance + loss_local_class + loss_global_exprate
@@ -172,7 +172,7 @@ if __name__ == "__main__":
 		writer.add_scalar('Loss Local Class', sum_loss_local_class.item() / args.len_sample, epoch)
 		writer.add_scalar('Loss Global Exprate', sum_loss_global_exprate.item() / args.len_sample, epoch)
 
-		if epoch % 10 == 0:
+		if epoch % 2 == 0:
 			print(f"Epoch {epoch} Loss: {ave_sum_loss.item()}")
 
 		if not (epoch % 200) and epoch:

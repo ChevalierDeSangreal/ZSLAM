@@ -114,6 +114,13 @@ class Map:
             随机生成圆形和三角形，这些物体的面积之和累计达到目标覆盖面积后停止。
             允许物体间重叠。
         """
+        self.circle_center_array = []
+        self.circle_radius_array = []
+        self.safe_center_array = []
+        self.safe_radius_array = []
+        self.line_array = []
+        self.triangle_array = []
+        self.triangle_point_array = []
         total_map_area = self.width * self.height
         target_area = self.max_coverage * total_map_area
         current_area = 0.0

@@ -163,10 +163,10 @@ class EnvMove:
         w_gt = min(w_gt, self.H + self.W)
         self.w_gt = w_gt
         
-        n_theta = int(2 * math.pi * self.agent.field_radius / ratio)
-        n_theta = min(n_theta, 2 * (self.W + self.H))
-        self.n_theta = n_theta
-        print(self.n_theta)
+        # n_theta = int(2 * math.pi * self.agent.field_radius / ratio)
+        # n_theta = min(n_theta, 2 * (self.W + self.H))
+        # self.n_theta = n_theta
+        # print(self.n_theta)
 
         self.map_center = torch.tensor([self.W//2, self.H//2], dtype=torch.float32, device=self.device)
         if len(self.map.circle_center_array) != 0:
@@ -360,17 +360,16 @@ class EnvMove:
         #print()
         d_norm = torch.norm(directions, dim=-1, keepdim=False) # B, w
         img = None
+        directions = directions.unsqueeze(2) # B, w, 1, 2
         if len(self.map.circle_center_array) != 0:
             circle_center = self.circle_center.unsqueeze(0) # 1, M, 2
             circle_radius = self.circle_radius.unsqueeze(0) # 1, M, 1
 
-            directions = directions.unsqueeze(2) # B, w, 1, 2
             delta = (origins - circle_center).unsqueeze(1) # B, 1, M, 2
             
             a = (directions ** 2).sum(dim=-1, keepdim=True) # B, w, 1, 1
             b = 2 * (directions * delta).sum(dim=-1, keepdim=True) # B, w, M, 1
             c = (delta ** 2).sum(dim=-1, keepdim=True) - circle_radius ** 2 # B, w, M, 1
-            directions = directions.squeeze(1) # B, w, 2
             
             discriminant = b ** 2 - 4 * a * c # B, w, M, 1
             valid = discriminant >= 0 # B, w, M, 1
@@ -382,11 +381,16 @@ class EnvMove:
             t = torch.where((t1 >= 0) & valid, t1, t2) # B, w, M, 1
             t = torch.where(valid & (t >= 0), t, torch.tensor(float('inf'), device=self.device)) # B, w, M, 1
             img, _ = torch.min(t.squeeze(-1), dim=-1) # B, w
+        directions = directions.squeeze(1) # B, w, 2
 
         if len(self.map.line_array) != 0:
             line = torch.stack(self.map.line_array).to(self.device) # N, 2, 2
             line = line.unsqueeze(0) # 1, N, 2, 2
             m, n = directions.shape[1], line.shape[1] # m, n = w, N
+            if img is None:
+                img = torch.full((self.batch_size, m), float('inf'), device=self.device) 
+            # print(f"m:{m}, n:{n}")
+            # print("Shape of direction", directions.shape)
             e = (line[..., 1, :] - line[..., 0, :]).unsqueeze(0).expand(self.batch_size, m, n, 2) # B, w, N, 2
             b = (line[..., 1, :] - origins).unsqueeze(1).expand(self.batch_size, m, n, 2) # B, w, N, 2
             A = torch.stack([directions.expand(self.batch_size, m, n, 2), e], dim=4) # B, w, N, 4
@@ -783,6 +787,7 @@ class EnvMove:
                     - batch_idx, row_idx, col_idx (Tensor): 用来在shape为B,W,H,...中的tensor里采样
                     - is_obstacle (Tensor): 未被障碍物占据的自由空间网格坐标。
                     - coord (Tensor): 采样点物理坐标
+                    - delta_coord (Tensor): 采样点到agent的物理相对坐标
                     - dist (Tensor): 采样点相对距离的平方
                     - theta (Tensor): 采样点相对方向
                     - attitude_encode (Tensor): 采样点相对方向编码
@@ -792,10 +797,10 @@ class EnvMove:
             "col_idx": c, # B, N
             "is_obstacle": v, # B, N
             "coord": coord, # B, N, 2
+            "delta_coord": dp, # B, N, 2
             "dist": dist, # B, N
             "ori": ori, # B, N
             "attitude_encode": att_encode # B, N, 4 
-
         """
         assert N > 0, "num error"
         batch_idx, idx = self.get_local_visible_boundary(N=N)
@@ -806,9 +811,10 @@ class EnvMove:
 
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         coord = self.grid_map.unsqueeze(0).expand(self.batch_size, self.W, self.H, 2) # B, W, H, 2
+        coord = coord[batch_idx, r, c, :]
 
-        coord = coord[batch_idx, r, c, :] - origins # B, N, 2
-        dx, dy = coord[..., 0], coord[..., 1]
+        dp = coord - origins # B, N, 2
+        dx, dy = dp[..., 0], dp[..., 1]
         dist = dx**2 + dy**2 # B, N
         ori = torch.atan2(dy.float(), dx.float()) # B, N
         att_encode = attitude_encode(ori.reshape(-1), device=self.device).reshape(self.batch_size, N, -1)
@@ -818,13 +824,72 @@ class EnvMove:
             "col_idx": c, # B, N
             "is_obstacle": v, # B, N
             "coord": coord, # B, N, 2
+            "delta_coord": dp, # B, N, 2
             "dist": dist, # B, N
             "ori": ori, # B, N
             "attitude_encode": att_encode # B, N, 4 
         }
-        
+    
+    def generate_global_ground_truth(self, square_size: int):
+        """
+        随机选取一个给定大小的正方形，计算已知点比总面积作为探索度供网络训练
+
+        参数:
+            square_size (int): 正方形的边长。单位为像素
+
+        返回:
+            center_coords (torch.Tensor): 正方形中心点的位置坐标，形状为 (B, 2)。
+            center_coords_encoded (torch.Tensor): 正方形中心点的编码，形状为 (B, 12)。
+            ground_truth (torch.Tensor): 每个正方形的探索度，形状为 (B, )。
+        """
+        B, H, W = self.batch_size, self.H, self.W
+        device = self.device
+
+        # 生成单个中心点坐标（所有 batch 共享）
+        center_x = torch.randint(low=square_size // 2, high=W - square_size // 2, size=(1,), device=device)
+        center_y = torch.randint(low=square_size // 2, high=H - square_size // 2, size=(1,), device=device)
+        center_coords = torch.stack([center_x, center_y], dim=1)  # (1, 2)
+
+        # 计算正方形区域的索引范围
+        x_start, x_end = center_x - square_size // 2, center_x + square_size // 2
+        y_start, y_end = center_y - square_size // 2, center_y + square_size // 2
+
+        visible_region = self.grid_mask_visible[:, y_start:y_end, x_start:x_end]  # (B, s, s)
+
+        # 计算每个 batch 的可见点数量
+        visible_count = visible_region.reshape(B, -1).sum(dim=1)  # (B, )
+
+        # 计算探索度（可见点数 / 区域总像素数）
+        ground_truth = visible_count.float() / (square_size * square_size)  # (B, )
+
+        # 将中心点复制到 batch 维度
+        center_coords = center_coords.expand(B, -1)  # (B, 2)
+        center_coord_encoded = position_encode(center_coords, device=device)
+
+
+        return center_coords, center_coord_encoded, ground_truth
     
     def generate_ground_truth(self, square_size: int):
+        """
+        调用generate_global_ground_truth和generate_local_ground_truth函数
+        """
+        # 生成全局的 ground truth
+        center_coords, center_coord_encoded, global_gt = self.generate_global_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
+
+        # 生成局部的 ground truth
+        local_gt = self.generate_local_ground_truth(self.cfg.agent_cfg.local_query_num)
+
+        gt = {}
+        gt["global_explrate"] = global_gt.unsqueeze(-1) # B, 1
+        gt["global_query_encode"] = center_coord_encoded
+        gt["local_query_encode"] = local_gt["attitude_encode"]
+        gt["local_gt_distance"] = local_gt["dist"].unsqueeze(-1) # B, N, 1
+        gt["local_gt_obstacle"] = local_gt["is_obstacle"].long()
+
+        return gt
+        
+
+    def tmp_generate_ground_truth(self, square_size: int):
         """
         随机选取一个给定大小的正方形，根据 self.grid_mask_obstacle 和 self.grid_mask_visible，
         并行计算并返回正方形中心点的位置坐标和正方形中每一个点是否可见可达的信息。
@@ -878,17 +943,15 @@ class EnvMove:
         self.reset_idx(idx_reset)
 
         
-        gt_position_encode, gt = self.generate_ground_truth(self.cfg.agent_cfg.square_size)
+        gt = self.generate_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
 
         step_output = {}
         step_output["image"], _ = self.get_images()
         step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device)
-        step_output["gt_position_encode"] = gt_position_encode
         step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset
 
-        #_, _ = self.get_local_visible_boundary(N=40)
-        _ = self.generate_local_ground_truth(N=40)
+        # _, _ = self.get_local_visible_boundary(N=40)
 
         return step_output
 
@@ -896,7 +959,6 @@ class EnvMove:
         if change_map:
             self.map.random_initialize()
             self.init_grid()
-            return
         
         idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)

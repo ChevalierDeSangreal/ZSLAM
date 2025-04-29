@@ -152,7 +152,7 @@ if __name__ == "__main__":
 			loss_global_exprate = criterion_mse(output_global_exprate, gt["global_explrate"].detach())
 			
 
-			loss_total = loss_local_distance + loss_local_class + loss_global_exprate
+			loss_total = 10 * loss_local_distance + loss_local_class + loss_global_exprate
 			loss_total.backward()
 
 			optimizer.step()

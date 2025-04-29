@@ -809,9 +809,9 @@ class EnvMove:
 
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         coord = self.grid_map.unsqueeze(0).expand(self.batch_size, self.W, self.H, 2) # B, W, H, 2
-
-        coord = coord[batch_idx, r, c, :] - origins # B, N, 2
-        dx, dy = coord[..., 0], coord[..., 1]
+        coord = coord[batch_idx, r, c, :]
+        relative_coord = coord - origins # B, N, 2
+        dx, dy = relative_coord[..., 0], relative_coord[..., 1]
         dist = dx**2 + dy**2 # B, N
         ori = torch.atan2(dy.float(), dx.float()) # B, N
         att_encode = attitude_encode(ori.reshape(-1), device=self.device).reshape(self.batch_size, N, -1)
@@ -881,6 +881,8 @@ class EnvMove:
         gt["local_query_encode"] = local_gt["attitude_encode"]
         gt["local_gt_distance"] = local_gt["dist"].unsqueeze(-1) # B, N, 1
         gt["local_gt_obstacle"] = local_gt["is_obstacle"].long()
+
+        gt["local_gt_coord"] = local_gt["coord"]
 
         return gt
         

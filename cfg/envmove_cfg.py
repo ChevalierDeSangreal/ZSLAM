@@ -3,7 +3,7 @@ import math
 class AgentCfg:
     f = 0.05 # 相机焦距
     ori = None # 相机朝向角度（弧度制）
-    field = math.pi / 3 # 视场角（弧度制），必须在 (0, π) 之间
+    field = math.pi * 0.95 # 视场角（弧度制），必须在 (0, π) 之间
     w = 64 # 图像的像素宽度
     safe_radius = f / math.sin(0.5 * field) # 安全半径，若未提供，则计算 `f / sin(0.5 * field)`
     field_radius = 10. # 视场半径，默认为 100.0，单位为m
@@ -23,7 +23,7 @@ class MapCfg:
     width = 5. # 地图宽度
     height = 5. # 地图高度
     ratio = 0.1 # 地图分辨率
-    max_coverage = 0.05 # 地图最大覆盖率（0到1之间），以地图总面积的比例计算。
+    max_coverage = 0.1 # 地图最大覆盖率（0到1之间），以地图总面积的比例计算。
 
 
 class EnvMoveCfg:

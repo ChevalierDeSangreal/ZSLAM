@@ -98,8 +98,6 @@ if __name__ == "__main__":
 	os.makedirs(save_dir, exist_ok=True)
 	dump_yaml(log_dir, params)
 
-	writer_dir = os.path.join(base_path, 'runs/', run_name)
-	writer = SummaryWriter(writer_dir)
 
 	model_load_path = os.path.join(base_path, "param/", args.param_load_name)
 	model_save_path = os.path.join(base_path, "param/", args.param_save_name)
@@ -111,7 +109,7 @@ if __name__ == "__main__":
 	envs = EnvMove(batch_size=args.batch_size, device=args.device)
 
 	model = ZSLAModelVer2(image_dim=64, hidden_dim=256, query_num=10, num_classes=2, device=device)
-	# model.load_model(path=model_load_path, device=device)
+	model.load_model(path=model_load_path, device=device)
 
 	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 	criterion_ce = nn.CrossEntropyLoss()
@@ -163,21 +161,18 @@ if __name__ == "__main__":
 			sum_loss_global_exprate += loss_global_exprate.detach()
 
 			envs.reset()
+			check_idx = 3
+			print(gt["local_gt_distance"][check_idx])
+			print(output_local_distance[check_idx])
+			print(gt["local_gt_obstacle"][check_idx])
+			print(output_local_class[check_idx])
+			exit(0)
 
 
 		ave_sum_loss = sum_loss / args.len_sample
 
-		writer.add_scalar('Loss', ave_sum_loss.item(), epoch)
-		writer.add_scalar('Loss Local Distance', sum_loss_local_distance.item() / args.len_sample, epoch)
-		writer.add_scalar('Loss Local Class', sum_loss_local_class.item() / args.len_sample, epoch)
-		writer.add_scalar('Loss Global Exprate', sum_loss_global_exprate.item() / args.len_sample, epoch)
 
 		if epoch % 2 == 0:
 			print(f"Epoch {epoch} Loss: {ave_sum_loss.item()}")
 
-		# if not (epoch % 200) and epoch:
-		# 	print("Saving Model...")
-		# 	model.save_model(model_save_path)
-
-	writer.close()
 	print("Training Complete!")

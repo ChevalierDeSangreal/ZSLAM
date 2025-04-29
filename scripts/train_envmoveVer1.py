@@ -36,7 +36,7 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=1.6e-5, help="The learning rate of the optimizer")
+	parser.add_argument("--learning_rate", type=float, default=1.6e-4, help="The learning rate of the optimizer")
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
@@ -175,9 +175,9 @@ if __name__ == "__main__":
 		if epoch % 2 == 0:
 			print(f"Epoch {epoch} Loss: {ave_sum_loss.item()}")
 
-		# if not (epoch % 200) and epoch:
-		# 	print("Saving Model...")
-		# 	model.save_model(model_save_path)
+		if not (epoch % 200) and epoch:
+			print("Saving Model...")
+			model.save_model(model_save_path)
 
 	writer.close()
 	print("Training Complete!")

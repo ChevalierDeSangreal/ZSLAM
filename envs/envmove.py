@@ -729,7 +729,73 @@ class EnvMove:
         batch_idx = torch.arange(B).view(-1, 1).expand(-1, N).to(self.device)
         indices = torch.stack([batch_idx, x, y])
         return indices
-    
+
+    def get_local_visible_boundary(self, N: int = 20):
+        """
+        角度均匀采样 N 条射线，idx shape 为 (B, N, 2) 代表每个 batch 上每条射线对应的最近边界点索引。
+        dir_mask 表示每条射线经过哪些网格点。
+        """
+        W, H, B = self.W, self.H, self.batch_size
+
+        # 网格坐标与机器人位置
+        points  = self.grid_map.unsqueeze(0)                 # (1, H, W, 2)
+        origins = self.agent.pos.unsqueeze(1).unsqueeze(1)   # (B, 1, 1, 2)
+        dp      = points - origins                          # (B, H, W, 2)
+        d2      = (dp[...,0]**2 + dp[...,1]**2)             # (B, H, W)
+        d2      = d2.unsqueeze(1).expand(-1, N, -1, -1)     # (B, N, H, W)
+
+        # 直接使用 self.__ratio 作为单元格边长（float，单位 m）
+        # 单元对角线半长 = ratio * sqrt(2) / 2
+        threshold = self.__ratio * (2 ** 0.5) / 2
+
+        # 构造 N 条射线方向的单位向量
+        angles = torch.arange(N, device=self.device, dtype=dp.dtype) * (2 * torch.pi / N)
+        u = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)  # (N, 2)
+
+        # 扩展到 (B, N, H, W, 2)
+        dp_exp = dp.unsqueeze(1).expand(-1, N, -1, -1, -1)
+        u_exp  = u.view(1, N, 1, 1, 2)
+
+        # 投影长度 和 垂直距离
+        proj = (dp_exp * u_exp).sum(dim=-1)     # (B, N, H, W)
+        perp = (dp_exp[...,0] * u_exp[...,1]    # 叉积绝对值
+                - dp_exp[...,1] * u_exp[...,0]).abs()
+
+        # dir_mask：射线 k 穿过单元 (i,j) 当且仅当 proj>=0 且 perp<=threshold
+        dir_mask = (proj >= 0) & (perp <= threshold)
+
+        # 与原来不可见区域结合，找出每条射线上第一个不可见的点
+        invisible_mask = ~self.grid_mask_visible.unsqueeze(1)  # (B, 1, H, W)
+        valid_mask     = dir_mask & invisible_mask            # (B, N, H, W)
+
+        # 将不合法位置设为无穷大距离，再沿每条射线取最小距离
+        inf = torch.tensor(float('inf'), device=self.device)
+        d_masked = torch.where(valid_mask, d2, inf)
+        min_d, flat_idx = torch.min(d_masked.view(B, N, -1), dim=2)  # (B,N)
+
+        # 转回二维索引
+        x = flat_idx // W
+        y = flat_idx %  W
+        batch_idx = torch.arange(B, device=self.device).unsqueeze(1).expand(B, N)
+
+        idx = torch.stack([x, y], dim=-1)  # (B, N, 2)
+        # 这块代码用来判断边界点是未知还是障碍物
+        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+        # r, c = idx[..., 0], idx[..., 1]
+        # gmo = self.grid_mask_obstacle.unsqueeze(0).expand(2, W, H)
+        # v = gmo[batch_idx, r, c]
+        # print(v)
+
+        # 这块代码用来判断选到的点是否都是未知点
+        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+        # r, c = idx[..., 0], idx[..., 1]
+        # v = self.grid_mask_visible[batch_idx, r, c]
+        # print(v)
+
+        #print(idx.shape)
+        return batch_idx, idx
+
+
     def get_local_visible_boundary(self, N: int=20):
         """
         角度均匀采样，idx shape为B,2代表每个batch选出N个点的index，配合batch_idx可直接采点，见函数末尾注释用例
@@ -761,20 +827,7 @@ class EnvMove:
 
         batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
         idx = torch.stack([x, y], dim=-1)
-        # 这块代码用来判断边界点是未知还是障碍物
-        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
-        # r, c = idx[..., 0], idx[..., 1]
-        # gmo = self.grid_mask_obstacle.unsqueeze(0).expand(2, W, H)
-        # v = gmo[batch_idx, r, c]
-        # print(v)
 
-        # 这块代码用来判断选到的点是否都是未知点
-        # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
-        # r, c = idx[..., 0], idx[..., 1]
-        # v = self.grid_mask_visible[batch_idx, r, c]
-        # print(v)
-
-        #print(idx.shape)
         return batch_idx, idx
 
     def generate_local_ground_truth(self, N:int):

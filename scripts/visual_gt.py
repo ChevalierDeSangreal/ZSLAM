@@ -60,10 +60,12 @@ def set_seed(seed):
 
 if __name__ == '__main__':
     # 可选：设置随机种子以复现实验
-    set_seed(42)
+    # set_seed(42)
 
     # 输出路径
-    output_path = "./output/visual_gt"
+    output_path = os.path.join(base_path, "output")
+    # print(output_path)
+    # print(base_path)
     os.makedirs(output_path, exist_ok=True)
 
     # 设备

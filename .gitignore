@@ -4,3 +4,4 @@ output/
 test_runs/
 *.pyc
 __pycache__/
+*.out

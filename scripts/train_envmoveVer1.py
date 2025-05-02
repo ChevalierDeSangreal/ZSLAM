@@ -36,7 +36,7 @@ def get_args():
 	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
 	
 	# train setting
-	parser.add_argument("--learning_rate", type=float, default=1.6e-5, help="The learning rate of the optimizer")
+	parser.add_argument("--learning_rate", type=float, default=5.6e-4, help="The learning rate of the optimizer")
 	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 
 	envs = EnvMove(batch_size=args.batch_size, device=args.device)
 
-	model = ZSLAModelVer2(image_dim=64, hidden_dim=256, query_num=10, num_classes=2, device=device)
+	model = ZSLAModelVer2(image_dim=512, hidden_dim=256, query_num=10, num_classes=2, device=device)
 	# model.load_model(path=model_load_path, device=device)
 
 	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)

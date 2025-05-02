@@ -60,7 +60,7 @@ def set_seed(seed):
 
 if __name__ == '__main__':
     # 可选：设置随机种子以复现实验
-    # set_seed(42)
+    # set_seed(4117852)
 
     # 输出路径
     output_path = os.path.join(base_path, "output")
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     env = EnvMove(batch_size=batch_size, resolution_ratio=0, device=device)
 
     # 加载模型
-    model = ZSLAModelVer2(image_dim=64, hidden_dim=256, query_num=10, num_classes=2, device=device)
+    model = ZSLAModelVer2(image_dim=512, hidden_dim=256, query_num=10, num_classes=2, device=device)
     model_load_path = os.path.join(base_path, "param", "movingVer0.pth")
     model.load_model(path=model_load_path, device=device)
     model.eval()
@@ -104,11 +104,14 @@ if __name__ == '__main__':
 
     # 模型推理，获取预测距离
     with torch.no_grad():
-        output_local_distance, _, _ = model(image, agent_pos_enc, 
+        output_local_distance, output_local_class, output_global_exprate = model(image, agent_pos_enc, 
                                            local_query_encode, global_query_encode)
     pred_distances = output_local_distance[0].cpu().numpy()  # (10,)     # (2,)
+    # print("image", image[0])
     print("local gt distance", gt["local_gt_distance"][0])
     print("pred_distances:", pred_distances)
+    print("local gt coord:", local_gt_coord)
+    print("global output", output_global_exprate[0])
     # 绘制并保存
     visualize_env_map(free_points, obstacle_points, safe_points,
                       output_path, desired_pos, agent_pos, local_gt_coord)

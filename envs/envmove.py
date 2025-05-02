@@ -729,38 +729,79 @@ class EnvMove:
         batch_idx = torch.arange(B).view(-1, 1).expand(-1, N).to(self.device)
         indices = torch.stack([batch_idx, x, y])
         return indices
-    
-    def get_local_visible_boundary(self, N: int=20):
+
+    def get_local_visible_boundary(self, N: int = 20):
         """
-        角度均匀采样，idx shape为B,2代表每个batch选出N个点的index，配合batch_idx可直接采点，见函数末尾注释用例
+        角度均匀采样 N 条射线，idx shape 为 (B, N, 2) 代表每个 batch 上每条射线对应的最近边界点索引。
+        dir_mask 表示每条射线经过哪些网格点。
         """
         W, H, B = self.W, self.H, self.batch_size
 
-        points = self.grid_map.unsqueeze(0) # 1, H, W, 2
-        origins = self.agent.pos.unsqueeze(1).unsqueeze(1) # B, 1, 1, 2
+        # 网格坐标与机器人位置
+        points  = self.grid_map.unsqueeze(0)                 # (1, W, H, 2)
+        origins = self.agent.pos.unsqueeze(1).unsqueeze(1)   # (B, 1, 1, 2)
+        dp      = points - origins                          # (B, W, H, 2)
+        d2      = (dp[...,0]**2 + dp[...,1]**2)             # (B, W, H)
+        d2      = d2.unsqueeze(1).expand(-1, N, -1, -1)     # (B, N, W, H)
+        # print(points[0, 0, 0]
+        # 直接使用 self.__ratio 作为单元格边长（float，单位 m）
+        # 单元对角线半长 = ratio * sqrt(2) / 2
+        threshold = self.__ratio * (2 ** 0.5) / 2
 
-        dp = points - origins
-        dx, dy = dp[..., 0], dp[..., 1]
-        d = dx**2 + dy**2 # B, H, W
-        d = d.unsqueeze(1).expand(-1, N, -1, -1) # B, N, H, W
-        
-        theta = torch.atan2(dy.float(), dx.float()) # B, H, W
-        theta = (theta + 2 * torch.pi) % (2 * torch.pi) # B, H, W
+        # 构造 N 条射线方向的单位向量
+        angles = torch.arange(N, device=self.device, dtype=dp.dtype) * (2 * torch.pi / N)
+        u = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)  # (N, 2)
 
-        n = (theta / (2 * torch.pi / N)).long() % N # B, H, W
-        dir_mask = (n.unsqueeze(1) == torch.arange(N, device=self.device).view(1, N, 1, 1))
-        
-        invisible_mask = ~self.grid_mask_visible.unsqueeze(1)
-        valid_mask = dir_mask & invisible_mask
+        # 扩展到 (B, N, W, H, 2)
+        dp_exp = dp.unsqueeze(1).expand(-1, N, -1, -1, -1)
+        u_exp  = u.view(1, N, 1, 1, 2)
 
-        d_masked = torch.where(valid_mask, d, torch.tensor(float('inf'), device=self.device))
-        min_d, flat_indices = torch.min(d_masked.view(B, N, -1), dim=2)
-        
-        x = flat_indices // W
-        y = flat_indices % W
+        # 投影长度 和 垂直距离
+        proj = (dp_exp * u_exp).sum(dim=-1)     # (B, N, W, H)
+        perp = (dp_exp[...,0] * u_exp[...,1]    # 叉积绝对值
+                - dp_exp[...,1] * u_exp[...,0]).abs()
 
-        batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
-        idx = torch.stack([x, y], dim=-1)
+        # dir_mask：射线 k 穿过单元 (i,j) 当且仅当 proj>=0 且 perp<=threshold
+        # 剔除当前所在点
+        dir_mask = (proj >= 0) & (perp <= threshold) & (d2 > threshold ** 2 - 1e-4)
+        # print(dir_mask[0, 0, :, :].any())
+        # 与原来不可见区域结合，找出每条射线上第一个不可见的点
+        invisible_mask = ~self.grid_mask_visible.unsqueeze(1)  # (B, 1, W, H)
+        valid_mask     = dir_mask & invisible_mask            # (B, N, W, H)
+        # print(valid_mask[0, 0, :, :].any())
+
+        # —— 新增：处理“无击中”情况 —— #
+        # 标记哪些射线根本没有击中
+        no_hit = ~valid_mask.flatten(2).any(dim=2)  # (B, N)
+
+        if no_hit.any():
+            # 对于这些射线，在 dir_mask 范围内找最大 proj
+            proj_flat = proj.view(B, N, -1)  # (B, N, W*H)
+            # 将非 dir_mask 部分的 proj 置为 -inf，保证 argmax 落在 dir_mask 区域
+            neg_inf = torch.tensor(float('-inf'), device=self.device, dtype=proj.dtype)
+            proj_masked = torch.where(dir_mask.view(B, N, -1), proj_flat, neg_inf)
+            # 找到最远点的平坦索引
+            far_idx = torch.argmax(proj_masked, dim=2)  # (B, N)
+            # 转回二维
+            x_far = far_idx // H
+            y_far = far_idx %  H
+
+            # 对每个 (b,n) 如果 no_hit[b,n] 则将对应 valid_mask[b,n,x_far,y_far] 置为 True
+            b_idx = torch.arange(B, device=self.device).unsqueeze(1).expand(B, N)
+            n_idx = torch.arange(N, device=self.device).unsqueeze(0).expand(B, N)
+            valid_mask[b_idx[no_hit], n_idx[no_hit], x_far[no_hit], y_far[no_hit]] = True
+
+        # 将不合法位置设为无穷大距离，再沿每条射线取最小距离
+        inf = torch.tensor(float('inf'), device=self.device)
+        d_masked = torch.where(valid_mask, d2, inf)
+        min_d, flat_idx = torch.min(d_masked.view(B, N, -1), dim=2)  # (B,N)
+        # print(d_masked[0, :, 0, 0])
+        # 转回二维索引
+        x = flat_idx // H
+        y = flat_idx %  H
+        batch_idx = torch.arange(B, device=self.device).unsqueeze(1).expand(B, N)
+
+        idx = torch.stack([x, y], dim=-1)  # (B, N, 2)
         # 这块代码用来判断边界点是未知还是障碍物
         # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
         # r, c = idx[..., 0], idx[..., 1]
@@ -776,6 +817,41 @@ class EnvMove:
 
         #print(idx.shape)
         return batch_idx, idx
+
+
+    # def get_local_visible_boundary(self, N: int=20):
+    #     """
+    #     角度均匀采样，idx shape为B,2代表每个batch选出N个点的index，配合batch_idx可直接采点，见函数末尾注释用例
+    #     """
+    #     W, H, B = self.W, self.H, self.batch_size
+
+    #     points = self.grid_map.unsqueeze(0) # 1, H, W, 2
+    #     origins = self.agent.pos.unsqueeze(1).unsqueeze(1) # B, 1, 1, 2
+
+    #     dp = points - origins
+    #     dx, dy = dp[..., 0], dp[..., 1]
+    #     d = dx**2 + dy**2 # B, H, W
+    #     d = d.unsqueeze(1).expand(-1, N, -1, -1) # B, N, H, W
+        
+    #     theta = torch.atan2(dy.float(), dx.float()) # B, H, W
+    #     theta = (theta + 2 * torch.pi) % (2 * torch.pi) # B, H, W
+
+    #     n = (theta / (2 * torch.pi / N)).long() % N # B, H, W
+    #     dir_mask = (n.unsqueeze(1) == torch.arange(N, device=self.device).view(1, N, 1, 1))
+        
+    #     invisible_mask = ~self.grid_mask_visible.unsqueeze(1)
+    #     valid_mask = dir_mask & invisible_mask
+
+    #     d_masked = torch.where(valid_mask, d, torch.tensor(float('inf'), device=self.device))
+    #     min_d, flat_indices = torch.min(d_masked.view(B, N, -1), dim=2)
+        
+    #     x = flat_indices // W
+    #     y = flat_indices % W
+
+    #     batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
+    #     idx = torch.stack([x, y], dim=-1)
+
+    #     return batch_idx, idx
 
     def generate_local_ground_truth(self, N:int):
         """
@@ -809,10 +885,11 @@ class EnvMove:
 
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         coord = self.grid_map.unsqueeze(0).expand(self.batch_size, self.W, self.H, 2) # B, W, H, 2
-
-        coord = coord[batch_idx, r, c, :] - origins # B, N, 2
-        dx, dy = coord[..., 0], coord[..., 1]
-        dist = dx**2 + dy**2 # B, N
+        coord = coord[batch_idx, r, c, :]
+        relative_coord = coord - origins # B, N, 2
+        dx, dy = relative_coord[..., 0], relative_coord[..., 1]
+        # dist = dx**2 + dy**2 # B, N
+        dist = torch.sqrt(dx**2 + dy**2)
         ori = torch.atan2(dy.float(), dx.float()) # B, N
         att_encode = attitude_encode(ori.reshape(-1), device=self.device).reshape(self.batch_size, N, -1)
         return {
@@ -881,6 +958,8 @@ class EnvMove:
         gt["local_query_encode"] = local_gt["attitude_encode"]
         gt["local_gt_distance"] = local_gt["dist"].unsqueeze(-1) # B, N, 1
         gt["local_gt_obstacle"] = local_gt["is_obstacle"].long()
+
+        gt["local_gt_coord"] = local_gt["coord"]
 
         return gt
         

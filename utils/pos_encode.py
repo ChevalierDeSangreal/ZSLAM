@@ -47,9 +47,4 @@ if __name__ == '__main__':
     position = torch.tensor([[1., 1.], [20., 1.], [5.25, -1.25]], dtype=torch.float32)
     print(position_encode(position).shape)
     poe = pos_encode(position, ori, device="cpu")
-<<<<<<< HEAD
     print(poe.shape)
-    
-=======
-    print(poe.shape)
->>>>>>> eba6fc19560b98f37ad3bf9704cf35559fbeec75

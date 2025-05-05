@@ -167,7 +167,6 @@ class EnvMove:
         # n_theta = min(n_theta, 2 * (self.W + self.H))
         # self.n_theta = n_theta
         # print(self.n_theta)
-
         self.map_center = torch.tensor([self.W//2, self.H//2], dtype=torch.float32, device=self.device)
         if len(self.map.circle_center_array) != 0:
             self.circle_center = torch.stack(self.map.circle_center_array).to(self.device)
@@ -339,8 +338,6 @@ class EnvMove:
         """
         origins = self.agent.pos.unsqueeze(1) # B, 1, 2
         orientations = self.agent.ori_vector.unsqueeze(1) # B, 1, 2
-        if not w:
-            w = self.agent.w
         f = self.agent.f.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) # 1, 1, 1
         field = self.agent.field.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) # 1, 1, 1
         field = torch.tan(field * 0.5) # 1, 1, 1
@@ -349,26 +346,31 @@ class EnvMove:
         v = f * field * v # B, 1, 2
         d = origins + f * orientations - v # B, 1, 2
         pixels = d + t.unsqueeze(-1) * 2 * v # B, w, 2
+        
         return origins, pixels
     
     def get_images(self, w=None):
         """
-
+        生成分辨率为w的深度图
         """
+        if not w:
+            w = self.agent.w
+        B = self.batch_size
         origins, pixels = self.get_image_pixels(w) # origins: B, 1, 2 pixels: B, w, 2
-        directions = pixels - origins # B, w, 2
+        d = pixels - origins # B, w, 2
         #print()
-        d_norm = torch.norm(directions, dim=-1, keepdim=False) # B, w
-        img = None
-        directions = directions.unsqueeze(2) # B, w, 1, 2
+        d_norm = torch.norm(d, dim=-1, keepdim=False) # B, w
+        img = torch.full((B, w), float('inf'), device=self.device)
+        
+        d = d.unsqueeze(2) # B, w, 1, 2
         if len(self.map.circle_center_array) != 0:
             circle_center = self.circle_center.unsqueeze(0) # 1, M, 2
             circle_radius = self.circle_radius.unsqueeze(0) # 1, M, 1
 
             delta = (origins - circle_center).unsqueeze(1) # B, 1, M, 2
             
-            a = (directions ** 2).sum(dim=-1, keepdim=True) # B, w, 1, 1
-            b = 2 * (directions * delta).sum(dim=-1, keepdim=True) # B, w, M, 1
+            a = (d ** 2).sum(dim=-1, keepdim=True) # B, w, 1, 1
+            b = 2 * (d * delta).sum(dim=-1, keepdim=True) # B, w, M, 1
             c = (delta ** 2).sum(dim=-1, keepdim=True) - circle_radius ** 2 # B, w, M, 1
             
             discriminant = b ** 2 - 4 * a * c # B, w, M, 1
@@ -379,37 +381,38 @@ class EnvMove:
             t2 = (-b + sqrt_discriminant) / (2 * a) # B, w, M, 1
 
             t = torch.where((t1 >= 0) & valid, t1, t2) # B, w, M, 1
-            t = torch.where(valid & (t >= 0), t, torch.tensor(float('inf'), device=self.device)) # B, w, M, 1
-            img, _ = torch.min(t.squeeze(-1), dim=-1) # B, w
-        directions = directions.squeeze(1) # B, w, 2
+            t = torch.where(valid & (t >= 0), t, torch.tensor(float('inf'), device=self.device)).squeeze(-1) # B, w, M
+            t, _ = t.min(dim=-1)
+            img = torch.min(img, t)
+            
+            del circle_center, circle_radius, delta, a, b, c, discriminant, valid, sqrt_discriminant, t1, t2, t
+            torch.cuda.empty_cache()
+            #img, _ = torch.min(t.squeeze(-1), dim=-1) # B, w
 
         if len(self.map.line_array) != 0:
             line = torch.stack(self.map.line_array).to(self.device) # N, 2, 2
-            line = line.unsqueeze(0) # 1, N, 2, 2
-            m, n = directions.shape[1], line.shape[1] # m, n = w, N
-            if img is None:
-                img = torch.full((self.batch_size, m), float('inf'), device=self.device) 
-            # print(f"m:{m}, n:{n}")
-            # print("Shape of direction", directions.shape)
-            e = (line[..., 1, :] - line[..., 0, :]).unsqueeze(0).expand(self.batch_size, m, n, 2) # B, w, N, 2
-            b = (line[..., 1, :] - origins).unsqueeze(1).expand(self.batch_size, m, n, 2) # B, w, N, 2
-            A = torch.stack([directions.expand(self.batch_size, m, n, 2), e], dim=4) # B, w, N, 4
-            valid = torch.abs(torch.det(A)) > 0# B, w
-            
-            x = torch.full((self.batch_size, m, n, 2), float('inf'), device=self.device) # B, w, N, 2
-            if valid.any():
-                idx = valid.nonzero(as_tuple=True)
-                A, b = A[idx], b[idx]
-                x[idx] = torch.linalg.solve(A, b) + 0.0
-                t = torch.full((self.batch_size, m, n), float('inf'), device=self.device)
-                idx = (x[..., 0] >= 1) & (x[..., 1] >= 0) & (x[..., 1] <= 1)
-                t[idx] = x[idx][..., 0]
-                t, _ = torch.min(t, dim=2)
-                img = torch.where((img<t), img, t)
+            p, q = line[:, 0, :], line[:, 1, :]
+
+            e = (q - p).unsqueeze(0).unsqueeze(0)
+            dp = p.unsqueeze(0).unsqueeze(0) - origins.unsqueeze(2)
+
+            denom = d[..., 0] * e[..., 1] - d[..., 1] * e[..., 0]
+            valid = denom.abs() > 1e-6
+
+            t = (dp[..., 0] * e[..., 1] - dp[..., 1] * e[..., 0]) / denom
+            u = (dp[..., 0] * d[..., 1] - dp[..., 1] * d[..., 0]) / denom
+
+            mask = valid & (t >= 0) & (u >= 0) & (u <= 1)
+            t = torch.where(mask, t, float('inf'))
+            t, _ = t.min(dim=-1)
+            img = torch.min(img, t)
+
+            del line, p, q, e, dp, denom, valid, t, u, mask
+            torch.cuda.empty_cache()
         # 返回 深度图， 成像线段上像素点实际坐标
         imgs = d_norm * img
-        imgs = torch.where(imgs == float('inf'), self.cfg.agent_cfg.field_radius, imgs)
-        # print(imgs[0].shape)
+        field_radius = self.cfg.agent_cfg.field_radius
+        imgs = torch.where(imgs > field_radius, field_radius, imgs)
         
         return imgs, pixels
     
@@ -439,20 +442,24 @@ class EnvMove:
                 - 计算点是否落在某个三角形内部，更新 mask。
                 5. 转换网格坐标到地图坐标系，并返回相关数据。
 
-            """
+             """
         ratio = map.ratio
         H, W = int(map.height/ratio), int(map.width/ratio)
+        
         center = torch.tensor([W//2, H//2], dtype=torch.float32, device=self.device)
-        x = torch.arange(W, device=self.device).view(W, 1).expand(W, H)
-        y = torch.arange(H, device=self.device).view(1, H).expand(W, H)
-        points = torch.stack([x, y], dim=-1).to(torch.float32).reshape(-1, 2)
-        mask = torch.zeros(points.shape[0], dtype=torch.bool, device=self.device)
+        
+        x = torch.arange(W, dtype=torch.float32, device=self.device).view(W, 1).expand(W, H)
+        y = torch.arange(H, dtype=torch.float32, device=self.device).view(1, H).expand(W, H)
+        
+        points = torch.stack([x, y], dim=-1).reshape(-1, 2) # WH, 2
+        mask = torch.zeros(H * W, dtype=torch.bool, device=self.device)
         
         if len(map.circle_center_array) != 0:
             circle_center = torch.stack(map.circle_center_array).to(self.device) / ratio
             circle_radius = torch.stack(map.circle_radius_array).to(self.device) / ratio
             circle_center = trans_simple(circle_center, center)
             d = torch.cdist(points, circle_center)
+        
             in_circle = (d <= circle_radius.T).any(dim=1)
             mask |= in_circle
         
@@ -485,41 +492,44 @@ class EnvMove:
         return points, points[~mask], points[mask], mask, grid, grid_mask
     
     def get_img_field(self):
+
         W, H = self.grid_map.shape[0], self.grid_map.shape[1]
-        origins = self.agent.pos.unsqueeze(1) # B, 1, 2
-        B = origins.shape[0]
-        imgs, pixels = self.get_images(self.w_gt) # B, wgt  B, wgt, 2
+        B = self.batch_size
+
         field_radius = self.agent.cfg.field_radius
+        half_fov_cos = torch.cos(self.agent.field * 0.5)
+
+        origins = self.agent.pos.unsqueeze(1) # B, 1, 2
+        ori_vec = self.agent.ori_vector.unsqueeze(1) # B, 1, 2
+
+        imgs, pixels = self.get_images(self.w_gt) # B, wgt  B, wgt, 2
         imgs = torch.where(imgs == float('inf'), field_radius, imgs)
+        
         # points = self.points_all.clone().unsqueeze(0).expand(B, -1, -1) # B, W*H, 2
-        points = self.grid_map.view(1, W * H, 2).repeat(B, 1, 1)
+        points = self.grid_map.view(1, W * H, 2)
         #points = points.reshape(B, self.W, self.H, 2)
         #points = torch.flip(points, dims=[2]) # B, W, H, 2
         
         vp = pixels - origins
-        ap = torch.atan2(vp[..., 1], vp[..., 0]) # B, wgt
+        vp_norm = vp / (torch.norm(vp, dim=-1, keepdim=True).clamp_min(1e-6))
+        # ap_cos = torch.sum(vp_norm * ori_vec, dim=-1)
 
         vc = points - origins # B, W*H, 2
-        ac = torch.atan2(vc[..., 1], vc[..., 0]) # B, W*H
         dc = torch.norm(vc, dim=-1) # B, W*H
+        vc_norm = vc / dc.unsqueeze(-1).clamp_min(1e-6)
 
-        r = torch.where(dc == 0, torch.tensor(1e-6, device=self.device), dc)
-        cosc = torch.sum(vc * self.agent.ori_vector.unsqueeze(1), dim=-1)
-        cosc /= r
-        cosA = torch.cos(self.agent.field * 0.5)
-        mask = (cosc >= cosA) & (r <= field_radius) # B, W*H
+        mask_angle = (torch.sum(vc_norm * ori_vec, dim=-1) >= half_fov_cos)
+        mask_radius = (dc <= field_radius)
 
-        a_diff = torch.abs(ap.unsqueeze(2) - ac.unsqueeze(1))
-        pixel_idx = a_diff.argmin(dim=1) # B, W*H
+        cos_diff = torch.matmul(vc_norm, vp_norm.transpose(1,2))
+        best_idx = cos_diff.argmax(dim=-1)
+        depth_at_point = imgs.gather(1, best_idx)
 
-        depths = torch.gather(imgs, 1, pixel_idx) # B, W*H
+        mask = mask_angle & mask_radius & (dc <= depth_at_point)
 
-        mask &= (dc <= depths)
-        
-        #mask = mask.reshape(B, self.W, self.H)
-        #mask = torch.flip(mask, dims=[2]) # B, W, H, 2
-        mask_grid = mask.reshape(B, W, H)
         mask_points = mask
+        mask_grid = mask.view(B, W, H)
+
         return mask_points, mask_grid
 
     def update_grid_mask_visible(self):
@@ -863,6 +873,7 @@ class EnvMove:
                     - batch_idx, row_idx, col_idx (Tensor): 用来在shape为B,W,H,...中的tensor里采样
                     - is_obstacle (Tensor): 未被障碍物占据的自由空间网格坐标。
                     - coord (Tensor): 采样点物理坐标
+                    - delta_coord (Tensor): 采样点到agent的物理相对坐标
                     - dist (Tensor): 采样点相对距离的平方
                     - theta (Tensor): 采样点相对方向
                     - attitude_encode (Tensor): 采样点相对方向编码
@@ -872,6 +883,7 @@ class EnvMove:
             "col_idx": c, # B, N
             "is_obstacle": v, # B, N
             "coord": coord, # B, N, 2
+            "delta_coord": dp, # B, N, 2
             "dist": dist, # B, N
             "ori": ori, # B, N
             "attitude_encode": att_encode # B, N, 4 

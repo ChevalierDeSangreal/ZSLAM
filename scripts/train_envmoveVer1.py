@@ -15,7 +15,7 @@ import yaml
 import argparse
 
 import sys
-base_path = '/home/wangzimo/VTT/ZSLAM'
+base_path = '.'
 sys.path.append(base_path)
 
 from envs import *
@@ -37,7 +37,7 @@ def get_args():
 	
 	# train setting
 	parser.add_argument("--learning_rate", type=float, default=5.6e-4, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=1024, help="Batch size of training. Notice that batch_size should be equal to num_envs")
+	parser.add_argument("--batch_size", type=int, default=64, help="Batch size of training. Notice that batch_size should be equal to num_envs")
 	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
 	parser.add_argument("--num_epoch", type=int, default=400900, help="Number of epochs")
 	parser.add_argument("--len_sample", type=int, default=5, help="Length of a sample")

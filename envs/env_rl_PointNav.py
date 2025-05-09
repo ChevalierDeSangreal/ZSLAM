@@ -7,6 +7,7 @@ from utils import position_encode, pos_encode, attitude_encode
 from typing import List
 import math
 from cfg import *
+import numpy as np
 
 class Agent:
     def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu'):
@@ -49,6 +50,10 @@ class Agent:
         self.field = torch.tensor(agent_cfg.field, dtype=torch.float, device=device)
         self.w = agent_cfg.w
         self.field_radius = torch.tensor(agent_cfg.field_radius, dtype=torch.float, device=device)
+
+
+        self.max_num_step = agent_cfg.max_num_step
+        self.num_step = torch.zeros((batch_size,), dtype=torch.int, device=device) # 计时器，与env.cfg中的max_num_step用于判断是否超时需要重置
         
         self.pos = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
         # 随机初始化ori（若未提供）
@@ -74,25 +79,52 @@ class Agent:
 
         self.desired_pos = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
 
-    def step(self):
-        # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
-        self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
-        # print(self.pos[0])
-        self.vel = self.vel + self.dt * self.acc
-        self.vel = torch.clamp(self.vel, -self.cfg.max_speed, self.cfg.max_speed)
-        # print("Before ori:", self.ori.shape)
-        # print(self.ori.shape, self)
-        self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
-        # print("After ori:", self.ori.shape)
-        self.att_vel = self.att_vel + self.dt * self.att_acc
-        self.att_vel = torch.clamp(self.att_vel, -self.cfg.max_att_speed, self.cfg.max_att_speed)
+    def step(self, action):
+        """
+        action: (b,) tensor，其中
+            0 表示静止，
+            1 表示前进 0.25m，
+            2 表示左转 20°，
+            3 表示右转 20°
+        """
+        # # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
+        # self.pos = self.pos + 0.5 * self.vel * self.dt + 0.5 * self.acc * self.dt ** 2
+        # # print(self.pos[0])
+        # self.vel = self.vel + self.dt * self.acc
+        # self.vel = torch.clamp(self.vel, -self.cfg.max_speed, self.cfg.max_speed)
+        # # print("Before ori:", self.ori.shape)
+        # # print(self.ori.shape, self)
+        # self.ori = self.ori + 0.5 * self.att_vel * self.dt + 0.5 * self.att_acc * self.dt ** 2
+        # # print("After ori:", self.ori.shape)
+        # self.att_vel = self.att_vel + self.dt * self.att_acc
+        # self.att_vel = torch.clamp(self.att_vel, -self.cfg.max_att_speed, self.cfg.max_att_speed)
+
+        # self.R = batch_theta_to_rotation_matrix(self.ori)
+        # # print("Before ori_vector:", self.ori_vector.shape)
+        # self.ori_vector = batch_theta_to_orientation_vector(self.ori)
+        # # print("After ori_vector:", self.ori_vector.shape)
+
+        # self.att_acc_timer += 1
+        b = self.batch_size
+        move_mask = (action == 1)
+        left_mask = (action == 2)
+        right_mask = (action == 3)
+
+        # 更新朝向（ori），单位：弧度
+        delta_theta = torch.zeros(b, device=self.device)
+        delta_theta[left_mask] = +math.pi / 9  # 左转 +20°
+        delta_theta[right_mask] = -math.pi / 9  # 右转 -20°
+        self.ori = (self.ori + delta_theta ) % (2 * math.pi)  # 保持在 [0, 2π) 范围内
 
         self.R = batch_theta_to_rotation_matrix(self.ori)
-        # print("Before ori_vector:", self.ori_vector.shape)
         self.ori_vector = batch_theta_to_orientation_vector(self.ori)
-        # print("After ori_vector:", self.ori_vector.shape)
 
-        self.att_acc_timer += 1
+        # 更新位置
+        delta_pos = torch.zeros_like(self.pos)  # shape: (b, 2)
+        delta_pos[move_mask] = 0.25 * self.ori_vector[move_mask]  # 仅更新需要移动的 agent
+        self.pos = self.pos + delta_pos
+
+        self.num_step += 1
 
     def reset_idx(self, idx, init_pos, desired_pos):
         num_reset = len(idx)
@@ -110,11 +142,12 @@ class Agent:
         self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset,), device=self.device)
 
         self.desired_pos[idx] = desired_pos[idx]
-    
+
+        self.num_step[idx] = 0
 
         
 
-class EnvMove:
+class EnvMove():
     def __init__(
             self, 
             batch_size:int,
@@ -149,6 +182,8 @@ class EnvMove:
             self.center = torch.tensor([H//2, W//2], dtype=torch.int32, device=device)
             self.init_visual_grid()
             bool_tensor_visualization(self.grid.to("cpu"))
+
+
 
 
         
@@ -829,40 +864,40 @@ class EnvMove:
         #print(idx.shape)
         return batch_idx, idx
 
-
-    # def get_local_visible_boundary(self, N: int=20):
-    #     """
-    #     角度均匀采样，idx shape为B,2代表每个batch选出N个点的index，配合batch_idx可直接采点，见函数末尾注释用例
-    #     """
-    #     W, H, B = self.W, self.H, self.batch_size
-
-    #     points = self.grid_map.unsqueeze(0) # 1, H, W, 2
-    #     origins = self.agent.pos.unsqueeze(1).unsqueeze(1) # B, 1, 1, 2
-
-    #     dp = points - origins
-    #     dx, dy = dp[..., 0], dp[..., 1]
-    #     d = dx**2 + dy**2 # B, H, W
-    #     d = d.unsqueeze(1).expand(-1, N, -1, -1) # B, N, H, W
         
-    #     theta = torch.atan2(dy.float(), dx.float()) # B, H, W
-    #     theta = (theta + 2 * torch.pi) % (2 * torch.pi) # B, H, W
+    def get_done(self, action):
+        """
+        终止条件：
+        1. 距离目标点小于某一范围并且动作为静止
+        2. 到达最大步数
+        3. 碰撞
+        返回:
+            done_mask: shape (batch_size,) 的布尔 tensor，指示哪些 agent 已终止
+            done_idx: shape (num_done,) 的 tensor，指示哪些 agent 已终止
+            info: dict 包含各类终止原因的 mask，可用于分析或后续处理
+        """
+        # 碰撞
+        mask_collision = self.is_collision()  # shape: (batch_size,), bool tensor
 
-    #     n = (theta / (2 * torch.pi / N)).long() % N # B, H, W
-    #     dir_mask = (n.unsqueeze(1) == torch.arange(N, device=self.device).view(1, N, 1, 1))
-        
-    #     invisible_mask = ~self.grid_mask_visible.unsqueeze(1)
-    #     valid_mask = dir_mask & invisible_mask
+        # 超时
+        mask_timeout = self.agent.num_step >= self.agent.max_num_step  # shape: (batch_size,)
 
-    #     d_masked = torch.where(valid_mask, d, torch.tensor(float('inf'), device=self.device))
-    #     min_d, flat_indices = torch.min(d_masked.view(B, N, -1), dim=2)
-        
-    #     x = flat_indices // W
-    #     y = flat_indices % W
+        # 到达目标并静止 (action == 0)
+        # 计算当前位置到目标位置的欧氏距离
+        dist = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
+        mask_reached = (dist <= self.cfg.success_radius) & (action == 0)
 
-    #     batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
-    #     idx = torch.stack([x, y], dim=-1)
+        # 综合终止条件
+        done_mask = mask_collision | mask_timeout | mask_reached
+        done_idx = torch.nonzero(done_mask, as_tuple=False).squeeze(1)
 
-    #     return batch_idx, idx
+        # 信息字典
+        info = {
+            'collision': mask_collision,
+            'timeout': mask_timeout,
+            'reached': mask_reached
+        }
+        return done_mask, done_idx, info
 
     def generate_local_ground_truth(self, N:int):
         """
@@ -1017,27 +1052,48 @@ class EnvMove:
 
         # print("ground_truth shape:", ground_truth.shape)
         return coords_encoded, ground_truth
-        
 
-    def step(self):
-        self.update_acc_attacc()
-        self.agent.step()
+    def get_reward(self, dist_before_step, dist_after_step, mask_reach):
+        """
+        计算奖励函数
+        """
+        reward = torch.zeros(self.batch_size, dtype=torch.float, device=self.device)
+
+        # geodesic 距离减少值
+        delta_geo = dist_before_step - dist_after_step
+
+        # 步进奖励: -Δgeo_dist - 0.01
+        reward += delta_geo - 0.01  # 即 - ( -delta_geo - 0.01 )
+
+        reward[mask_reach] = 2.5
+
+        return reward
+
+    def step(self, action):
+
+        dist_before_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
+
+        # self.update_acc_attacc()
+        self.agent.step(action)
         #self.update_grid_mask_visible_()
         self.update_grid_mask_visible()
 
+        dist_after_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
 
-        mask_reset = self.is_collision()
-        idx_reset = torch.nonzero(mask_reset, as_tuple=True)[0]
+        mask_reset, idx_reset, info = self.get_done(action)
+
         self.reset_idx(idx_reset)
 
-        
-        gt = self.generate_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
+        reward = self.get_reward(dist_before_step, dist_after_step, info['reached'])
+        # gt = self.generate_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
 
         step_output = {}
         step_output["image"], _ = self.get_images()
         step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device)
-        step_output["gt"] = gt
+        # step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset
+        step_output["reward"] = reward
+        step_output["done"] = mask_reset
 
         # _, _ = self.get_local_visible_boundary(N=40)
 
@@ -1050,7 +1106,7 @@ class EnvMove:
         
         idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)
-        return 
+        return
 
     def reset_idx(self, idx):
         if len(idx):

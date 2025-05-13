@@ -1,194 +1,219 @@
-import os
-import random
-import time
+# train.py
+# Script to train policies in Isaac Gym
+#
+# Copyright (c) 2018-2023, NVIDIA Corporation
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.distributions.normal import Normal
-from torch.utils.tensorboard import SummaryWriter
-import matplotlib.pyplot as plt
-import pytz
-from datetime import datetime
-import yaml
-import argparse
+import hydra
 
-import sys
-base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(base_path)
+from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
-from envs import *
-from model import *
 
-"""
-相比于train_envmoveVer1.py
-使用了新的模型ZSLAModelVer3
-引入时序
-"""
+def preprocess_train_config(cfg, config_dict):
+    """
+    Adding common configuration parameters to the rl_games train config.
+    An alternative to this is inferring them in task-specific .yaml files, but that requires repeating the same
+    variable interpolations in each config.
+    """
 
-def get_args():
-	parser = argparse.ArgumentParser(description="APG Policy")
-	
-	parser.add_argument("--task", type=str, default="2DRotMov", help="The name of the task.")
-	parser.add_argument("--experiment_name", type=str, default="Ver0", help="Name of the experiment to run or load.")
-	parser.add_argument("--seed", type=int, default=42, help="Random seed. Overrides config file if provided.")
-	parser.add_argument("--device", type=str, default="cuda:0", help="The device")
-	
-	# train setting
-	parser.add_argument("--learning_rate", type=float, default=1.6e-4, help="The learning rate of the optimizer")
-	parser.add_argument("--batch_size", type=int, default=32, help="Batch size of training. Notice that batch_size should be equal to num_envs")
-	parser.add_argument("--num_worker", type=int, default=4, help="Number of workers for data loading")
-	parser.add_argument("--num_epoch", type=int, default=10900, help="Number of epochs")
-	parser.add_argument("--len_sample", type=int, default=400, help="Length of a sample")
-	parser.add_argument("--slide_size", type=int, default=20, help="Size of GRU input window")
-	
-	# model setting
-	parser.add_argument("--param_save_name", type=str, default='movingVer1.pth', help="The path to save model parameters")
-	parser.add_argument("--param_load_name", type=str, default='movingVer1.pth', help="The path to load model parameters")
-	
-	args = parser.parse_args()
+    train_cfg = config_dict['params']['config']
 
-	
-	return args
+    train_cfg['device'] = cfg.rl_device
 
-def get_time():
+    train_cfg['population_based_training'] = cfg.pbt.enabled
+    train_cfg['pbt_idx'] = cfg.pbt.policy_idx if cfg.pbt.enabled else None
 
-	timestamp = time.time()  # 替换为您的时间戳
+    train_cfg['full_experiment_name'] = cfg.get('full_experiment_name')
 
-	# 将时间戳转换为datetime对象
-	dt_object_utc = datetime.utcfromtimestamp(timestamp)
+    print(f'Using rl_device: {cfg.rl_device}')
+    print(f'Using sim_device: {cfg.sim_device}')
+    print(train_cfg)
 
-	# 指定目标时区（例如"Asia/Shanghai"）
-	target_timezone = pytz.timezone("Asia/Shanghai")
-	dt_object_local = dt_object_utc.replace(tzinfo=pytz.utc).astimezone(target_timezone)
+    try:
+        model_size_multiplier = config_dict['params']['network']['mlp']['model_size_multiplier']
+        if model_size_multiplier != 1:
+            units = config_dict['params']['network']['mlp']['units']
+            for i, u in enumerate(units):
+                units[i] = u * model_size_multiplier
+            print(f'Modified MLP units by x{model_size_multiplier} to {config_dict["params"]["network"]["mlp"]["units"]}')
+    except KeyError:
+        pass
 
-	# 将datetime对象格式化为字符串
-	formatted_time_local = dt_object_local.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return config_dict
 
-	return formatted_time_local
 
-def dump_yaml(file_path, data):
-	"""将字典数据保存到 YAML 文件中"""
-	with open(file_path, 'w') as f:
-		yaml.safe_dump(data, f)
+@hydra.main(version_base="1.1", config_name="config", config_path="./cfg")
+def launch_rlg_hydra(cfg: DictConfig):
 
-def set_seed(seed):
-	torch.manual_seed(seed)
-	torch.cuda.manual_seed_all(seed)  # 如果使用 GPU，确保所有 CUDA 设备的随机性固定
-	np.random.seed(seed)
-	random.seed(seed)
-	torch.backends.cudnn.deterministic = True
-	torch.backends.cudnn.benchmark = False  # 可能会降低某些情况下的性能，但保证了可复现性
+    import logging
+    import os
+    from datetime import datetime
+
+    # noinspection PyUnresolvedReferences
+    import isaacgym
+    from isaacgymenvs.pbt.pbt import PbtAlgoObserver, initial_pbt_check
+    from isaacgymenvs.utils.rlgames_utils import multi_gpu_get_rank
+    from hydra.utils import to_absolute_path
+    from isaacgymenvs.tasks import isaacgym_task_map
+    import gym
+    from isaacgymenvs.utils.reformat import omegaconf_to_dict, print_dict
+    from isaacgymenvs.utils.utils import set_np_formatting, set_seed
+
+    if cfg.pbt.enabled:
+        initial_pbt_check(cfg)
+
+    from isaacgymenvs.utils.rlgames_utils import RLGPUEnv, RLGPUAlgoObserver, MultiObserver, ComplexObsRLGPUEnv
+    from isaacgymenvs.utils.wandb_utils import WandbAlgoObserver
+    from rl_games.common import env_configurations, vecenv
+    from rl_games.torch_runner import Runner
+    from rl_games.algos_torch import model_builder
+    from isaacgymenvs.learning import amp_continuous
+    from isaacgymenvs.learning import amp_players
+    from isaacgymenvs.learning import amp_models
+    from isaacgymenvs.learning import amp_network_builder
+    import isaacgymenvs
+
+
+    time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_name = f"{cfg.wandb_name}_{time_str}"
+
+    # ensure checkpoints can be specified as relative paths
+    if cfg.checkpoint:
+        cfg.checkpoint = to_absolute_path(cfg.checkpoint)
+
+    cfg_dict = omegaconf_to_dict(cfg)
+    print_dict(cfg_dict)
+
+    # set numpy formatting for printing only
+    set_np_formatting()
+
+    # global rank of the GPU
+    global_rank = int(os.getenv("RANK", "0"))
+
+    # sets seed. if seed is -1 will pick a random one
+    cfg.seed = set_seed(cfg.seed, torch_deterministic=cfg.torch_deterministic, rank=global_rank)
+
+    def create_isaacgym_env(**kwargs):
+        envs = isaacgymenvs.make(
+            cfg.seed, 
+            cfg.task_name, 
+            cfg.task.env.numEnvs, 
+            cfg.sim_device,
+            cfg.rl_device,
+            cfg.graphics_device_id,
+            cfg.headless,
+            cfg.multi_gpu,
+            cfg.capture_video,
+            cfg.force_render,
+            cfg,
+            **kwargs,
+        )
+        if cfg.capture_video:
+            envs.is_vector_env = True
+            envs = gym.wrappers.RecordVideo(
+                envs,
+                f"videos/{run_name}",
+                step_trigger=lambda step: step % cfg.capture_video_freq == 0,
+                video_length=cfg.capture_video_len,
+            )
+        return envs
+
+    env_configurations.register('rlgpu', {
+        'vecenv_type': 'RLGPU',
+        'env_creator': lambda **kwargs: create_isaacgym_env(**kwargs),
+    })
+
+    ige_env_cls = isaacgym_task_map[cfg.task_name]
+    dict_cls = ige_env_cls.dict_obs_cls if hasattr(ige_env_cls, 'dict_obs_cls') and ige_env_cls.dict_obs_cls else False
+
+    if dict_cls:
+        
+        obs_spec = {}
+        actor_net_cfg = cfg.train.params.network
+        obs_spec['obs'] = {'names': list(actor_net_cfg.inputs.keys()), 'concat': not actor_net_cfg.name == "complex_net", 'space_name': 'observation_space'}
+        if "central_value_config" in cfg.train.params.config:
+            critic_net_cfg = cfg.train.params.config.central_value_config.network
+            obs_spec['states'] = {'names': list(critic_net_cfg.inputs.keys()), 'concat': not critic_net_cfg.name == "complex_net", 'space_name': 'state_space'}
+        
+        vecenv.register('RLGPU', lambda config_name, num_actors, **kwargs: ComplexObsRLGPUEnv(config_name, num_actors, obs_spec, **kwargs))
+    else:
+
+        vecenv.register('RLGPU', lambda config_name, num_actors, **kwargs: RLGPUEnv(config_name, num_actors, **kwargs))
+
+    rlg_config_dict = omegaconf_to_dict(cfg.train)
+    rlg_config_dict = preprocess_train_config(cfg, rlg_config_dict)
+
+    observers = [RLGPUAlgoObserver()]
+
+    if cfg.pbt.enabled:
+        pbt_observer = PbtAlgoObserver(cfg)
+        observers.append(pbt_observer)
+
+    if cfg.wandb_activate:
+        cfg.seed += global_rank
+        if global_rank == 0:
+            # initialize wandb only once per multi-gpu run
+            wandb_observer = WandbAlgoObserver(cfg)
+            observers.append(wandb_observer)
+
+    # register new AMP network builder and agent
+    def build_runner(algo_observer):
+        runner = Runner(algo_observer)
+        runner.algo_factory.register_builder('amp_continuous', lambda **kwargs : amp_continuous.AMPAgent(**kwargs))
+        runner.player_factory.register_builder('amp_continuous', lambda **kwargs : amp_players.AMPPlayerContinuous(**kwargs))
+        model_builder.register_model('continuous_amp', lambda network, **kwargs : amp_models.ModelAMPContinuous(network))
+        model_builder.register_network('amp', lambda **kwargs : amp_network_builder.AMPBuilder())
+
+        return runner
+
+    # convert CLI arguments into dictionary
+    # create runner and set the settings
+    runner = build_runner(MultiObserver(observers))
+    runner.load(rlg_config_dict)
+    runner.reset()
+
+    # dump config dict
+    if not cfg.test:
+        experiment_dir = os.path.join('runs', cfg.train.params.config.name + 
+        '_{date:%d-%H-%M-%S}'.format(date=datetime.now()))
+
+        os.makedirs(experiment_dir, exist_ok=True)
+        with open(os.path.join(experiment_dir, 'config.yaml'), 'w') as f:
+            f.write(OmegaConf.to_yaml(cfg))
+
+    runner.run({
+        'train': not cfg.test,
+        'play': cfg.test,
+        'checkpoint': cfg.checkpoint,
+        'sigma': cfg.sigma if cfg.sigma != '' else None
+    })
+
 
 if __name__ == "__main__":
-	# 设置随机种子
-	set_seed(42)
-	# torch.autograd.set_detect_anomaly(True)
-	args = get_args()
-	run_name = f"{args.task}__{args.experiment_name}__{args.seed}__{get_time()}"
-
-	# 保存参数文件
-	print(base_path)
-	log_dir = os.path.join(base_path, 'runs/', run_name, "env.yaml")
-	params = {
-		k: v for k, v in args._get_kwargs()
-	}
-	save_dir = os.path.dirname(log_dir)
-	os.makedirs(save_dir, exist_ok=True)
-	dump_yaml(log_dir, params)
-
-	writer_dir = os.path.join(base_path, 'runs/', run_name)
-	writer = SummaryWriter(writer_dir)
-
-	model_load_path = os.path.join(base_path, "param/", args.param_load_name)
-	model_save_path = os.path.join(base_path, "param/", args.param_save_name)
-
-	device = args.device
-	print("using device:", device)
-
-
-	envs = EnvMove(batch_size=args.batch_size, device=args.device)
-
-	model = ZSLAModelVer3(image_dim=512, hidden_dim=256, query_num=10, num_classes=2, device=device)
-	# model.load_model(path=model_load_path, device=device)
-
-	optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-	criterion_ce = nn.CrossEntropyLoss()
-	criterion_mse = nn.MSELoss()
-
-	no_reset_buf = torch.ones(args.batch_size, device=device)
-	
-	for epoch in range(args.num_epoch):
-		print(f"Epoch {epoch} begin...")
-		optimizer.zero_grad()
-
-		h_local = None
-		h_global = None
-
-		envs.reset(change_map=True)
-		sum_loss = 0
-		sum_loss_local_distance = 0
-		sum_loss_local_class = 0
-		sum_loss_global_exprate = 0
-		
-
-		for step in range(args.len_sample):
-			# print("step", step)
-			step_output = envs.step()
-			idx_reset = step_output["idx_reset"]
-
-			if step % 10 == 0:
-
-				image = step_output["image"].detach()
-				agent_pos = step_output["agent_pos_encode"].detach()
-				gt = step_output["gt"]
-				idx_reset = step_output["idx_reset"]
-
-				output_local_distance, output_local_class, output_global_exprate, h_local, h_global = model(image, agent_pos, gt["local_query_encode"].detach(), gt["global_query_encode"].detach(), h_local, h_global)
-
-
-			
-			h_local = h_local.clone()
-			h_local[:, idx_reset] = 0
-			h_global = h_global.clone()
-			h_global[:, idx_reset] = 0
-
-			if step % 50 == 0:
-				# print("shape of output_local_distance", output_local_distance.shape)
-				# print("shape of gt_local_distance", gt["local_gt_distance"].shape)
-				loss_local_distance = criterion_mse(output_local_distance, gt["local_gt_distance"].detach())
-				# print("shape of output_local_class", output_local_class.shape)
-				# print("shape of gt_local_obstacle", gt["local_gt_obstacle"].shape)
-				loss_local_class = criterion_ce(output_local_class.permute(0, 2, 1), gt["local_gt_obstacle"].detach())
-				# print("shape of output_global_exprate", output_global_exprate.shape)
-				# print("shape of gt_global_exprate", gt["global_explrate"].shape)
-				loss_global_exprate = criterion_mse(output_global_exprate, gt["global_explrate"].detach())
-		
-
-				loss_total = 10 * loss_local_distance + loss_local_class + loss_global_exprate
-
-				sum_loss += loss_total
-				sum_loss_local_distance += loss_local_distance
-				sum_loss_local_class += loss_local_class
-				sum_loss_global_exprate += loss_global_exprate
-
-		sum_loss.backward()
-
-		optimizer.step()
-		optimizer.zero_grad()
-
-		writer.add_scalar('Loss', sum_loss.item(), epoch)
-		writer.add_scalar('Loss Local Distance', sum_loss_local_distance.item(), epoch)
-		writer.add_scalar('Loss Local Class', sum_loss_local_class.item(), epoch)
-		writer.add_scalar('Loss Global Exprate', sum_loss_global_exprate.item(), epoch)
-
-		if epoch % 2 == 0:
-			print(f"Epoch {epoch} Loss: {loss_total.item()}")
-
-		if not (epoch % 200) and epoch:
-			print("Saving Model...")
-			model.save_model(model_save_path)
-
-	writer.close()
-	print("Training Complete!")
+    launch_rlg_hydra()

@@ -8,6 +8,8 @@ from typing import List
 import math
 from cfg import *
 import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
 
 class Agent:
     def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu'):
@@ -147,12 +149,10 @@ class Agent:
 
         
 
-class EnvMove():
+class EnvPointNavVer0():
     def __init__(
-            self, 
-            batch_size:int,
+            self,
             resolution_ratio=0.0,
-            device="cpu",
             ):
         # 初始化环境之后得手动调用一次reset，用于生成智能体状态、更新可视范围
         # resolution_ratio < 0 不渲染
@@ -161,12 +161,15 @@ class EnvMove():
                         之所以需要 w_gt 和 w 同时存在，是因为w_gt算出来可能太大了（分辨率0.01，视场角为90°时，w会逼近1000），而现实中分辨率不高的场景很普遍
                         由于ratio是env的属性，所以w_gt应在EnvMove的init_grid方法中实现。
         """
-        self.batch_size = batch_size
-        self.device = device
+        self.env_name = "PointNavVer0"
 
-        self.cfg = EnvMoveCfg()
 
-        self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device)
+        self.cfg = EnvPointNavCfg()
+
+        self.batch_size = self.cfg.batch_size
+        self.device = self.cfg.device
+
+        self.agent = Agent(self.cfg.agent_cfg, self.batch_size, dt=self.cfg.dt, device=self.device)
 
         self.map = Map(self.cfg.map_cfg)
         self.map.random_initialize()
@@ -178,13 +181,13 @@ class EnvMove():
         if resolution_ratio > 0:
             H, W = int(self.map.height/resolution_ratio), int(self.map.width/resolution_ratio)
             self.H, self.W = H, W
-            self.grid = torch.zeros((H, W), device=device, dtype=torch.bool)
-            self.center = torch.tensor([H//2, W//2], dtype=torch.int32, device=device)
+            self.grid = torch.zeros((H, W), device=self.device, dtype=torch.bool)
+            self.center = torch.tensor([H//2, W//2], dtype=torch.int32, device=self.device)
             self.init_visual_grid()
             bool_tensor_visualization(self.grid.to("cpu"))
 
-
-
+        self.action_space = spaces.Discrete(4) # 0: stop, 1: move, 2: left, 3: right
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.agent.w + 16 + 12,), dtype=np.float32) # 深度相机像素数+自身位姿编码+目标点位置编码
 
         
 
@@ -872,8 +875,8 @@ class EnvMove():
         2. 到达最大步数
         3. 碰撞
         返回:
-            done_mask: shape (batch_size,) 的布尔 tensor，指示哪些 agent 已终止
-            done_idx: shape (num_done,) 的 tensor，指示哪些 agent 已终止
+            reset_mask: shape (batch_size,) 的布尔 tensor，指示哪些 agent 已终止
+            reset_idx: shape (num_done,) 的 tensor，指示哪些 agent 已终止
             info: dict 包含各类终止原因的 mask，可用于分析或后续处理
         """
         # 碰撞
@@ -888,8 +891,8 @@ class EnvMove():
         mask_reached = (dist <= self.cfg.success_radius) & (action == 0)
 
         # 综合终止条件
-        done_mask = mask_collision | mask_timeout | mask_reached
-        done_idx = torch.nonzero(done_mask, as_tuple=False).squeeze(1)
+        reset_mask = mask_collision | mask_timeout | mask_reached
+        reset_idx = torch.nonzero(reset_mask, as_tuple=False).squeeze(1)
 
         # 信息字典
         info = {
@@ -897,7 +900,7 @@ class EnvMove():
             'timeout': mask_timeout,
             'reached': mask_reached
         }
-        return done_mask, done_idx, info
+        return reset_mask, reset_idx, info
 
     def generate_local_ground_truth(self, N:int):
         """
@@ -985,7 +988,8 @@ class EnvMove():
 
         # 将中心点复制到 batch 维度
         center_coords = center_coords.expand(B, -1)  # (B, 2)
-        center_coord_encoded = position_encode(center_coords, device=device)
+        pysical_center_coords = self.grid_map[center_coords[:, 0], center_coords[:, 1], :]  # (B, 2)
+        center_coord_encoded = position_encode(pysical_center_coords, device=device)
 
 
         return center_coords, center_coord_encoded, ground_truth
@@ -1070,6 +1074,14 @@ class EnvMove():
         return reward
 
     def step(self, action):
+        """
+        输出与isaac lab的DirectRLEnv一致: 
+        state: VecEnvObs | None
+        reward: torch.Tensor
+        reset_terminated: torch.Tensor in (num_envs,)
+        reset_timeout: torch.Tensor in (num_envs,)
+        info: dict
+        """
 
         dist_before_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
 
@@ -1080,24 +1092,29 @@ class EnvMove():
 
         dist_after_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
 
-        mask_reset, idx_reset, info = self.get_done(action)
+        done, idx_reset, info = self.get_done(action)
+        reset_timeout = info["timeout"]
+        reset_terminated = info["collision"] | info["reached"]
 
         self.reset_idx(idx_reset)
 
         reward = self.get_reward(dist_before_step, dist_after_step, info['reached'])
         # gt = self.generate_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
 
-        step_output = {}
-        step_output["image"], _ = self.get_images()
-        step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device)
-        # step_output["gt"] = gt
-        step_output["idx_reset"] = idx_reset
-        step_output["reward"] = reward
-        step_output["done"] = mask_reset
+        info = {}
+        info["image"], _ = self.get_images()
+        info["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device) # B, 16
+        info["target_pos_encode"] = position_encode(self.agent.desired_pos, device=self.device) # B, 12
+        # info["gt"] = gt
+        info["idx_reset"] = idx_reset
+        info["reward"] = reward
+        info["done"] = done
 
+        state = torch.cat([info["image"], info["agent_pos_encode"]], info["target_pos_encode"], dim=1)
+        state_dict = {"policy": state} # align with isaac lab env
         # _, _ = self.get_local_visible_boundary(N=40)
 
-        return step_output
+        return state_dict, reward, reset_timeout, reset_terminated, info
 
     def reset(self, change_map=False):
         if change_map:
@@ -1106,7 +1123,15 @@ class EnvMove():
         
         idx = torch.arange(self.batch_size, dtype=torch.int64, device=self.device)
         self.reset_idx(idx)
-        return
+        image, _ = self.get_images() # B, w
+        agent_pos_encode = pos_encode(self.agent.pos, self.agent.ori, device=self.device) # B, 16
+        target_pos_encode = position_encode(self.agent.desired_pos, device=self.device) # B, 12
+
+        state = torch.cat([image, agent_pos_encode, target_pos_encode], dim=1)
+        info = {}
+        state_dict = {"policy": state} # align with isaac lab env
+        # print(state.shape)
+        return state_dict, info
 
     def reset_idx(self, idx):
         if len(idx):
@@ -1118,3 +1143,11 @@ class EnvMove():
 
             self.update_grid_mask_visible()
         return
+
+    def seed(self, seed):
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # 如果使用 GPU，确保所有 CUDA 设备的随机性固定
+        np.random.seed(seed)
+
+    def close(self):
+        return None

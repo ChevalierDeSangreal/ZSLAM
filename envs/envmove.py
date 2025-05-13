@@ -950,7 +950,8 @@ class EnvMove:
 
         # 将中心点复制到 batch 维度
         center_coords = center_coords.expand(B, -1)  # (B, 2)
-        center_coord_encoded = position_encode(center_coords, device=device)
+        pysical_center_coords = self.grid_map[center_coords[:, 0], center_coords[:, 1], :]  # (B, 2)
+        center_coord_encoded = position_encode(pysical_center_coords, device=device)
 
 
         return center_coords, center_coord_encoded, ground_truth

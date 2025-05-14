@@ -14,7 +14,8 @@ def pos_encode(position, ori, theta=0.1, device="cpu"):
     :param device: 设备
     :return: 位置编码，形状为 (batch_size, 16)
     """
-    assert position.shape[0] == ori.shape[0]
+    assert position.shape[0] == ori.shape[0], "pos shape error"
+    assert position.dtype == ori.dtype, "pos dtype error"
 
     p, a = position_encode(position, theta, device=device), attitude_encode(ori, device=device)
     return torch.cat([p, a], dim=1)
@@ -26,8 +27,9 @@ def position_encode(position, theta=0.1, device="cpu"):
     :param device: 设备
     :return: 位置编码，形状为 (batch_size, 12)
     """
+    dtype = position.dtype
     B, _ = position.shape
-    ones = torch.ones(B, 1).to(device)
+    ones = torch.ones(B, 1, dtype=dtype).to(device)
     R = batch_theta_to_rotation_matrix(theta * torch.cat([position.to(device), ones], dim=1)).reshape(-1, 12) + 0.
     return R
 
@@ -40,6 +42,43 @@ def attitude_encode(ori, device="cpu"):
     """
     att_encode = torch.stack([torch.cos(ori), -torch.sin(ori), torch.sin(ori), torch.cos(ori)], dim=1).to(device) + 0.
     return att_encode
+
+def pos_encode_test_1(position, ori, theta=0.1, device="cpu"):
+    """
+    位置编码
+    :param position: 位置信息，形状为 (batch_size, 2)
+    :param ori: 姿态信息，形状为 (batch_size,)
+    :param device: 设备
+    :return: 位置编码，形状为 (batch_size, 16)
+    """
+    assert position.shape[0] == ori.shape[0]
+
+    p, a = position_encode_test_1(position, theta, device=device), attitude_encode_test_1(ori, device=device)
+    return torch.cat([p, a], dim=1)
+
+def position_encode_test_1(position, theta=0.1, device="cpu"):
+    """
+    位置编码
+    :param position: 位置信息，形状为 (batch_size, 2)
+    :param device: 设备
+    :return: 位置编码，形状为 (batch_size, 12)
+    """
+    return position.to(device)
+    # B, _ = position.shape
+    # ones = torch.ones(B, 1).to(device)
+    # R = batch_theta_to_rotation_matrix(theta * torch.cat([position.to(device), ones], dim=1)).reshape(-1, 12) + 0.
+    # return R
+
+def attitude_encode_test_1(ori, device="cpu"):
+    """
+    姿态编码
+    :param ori: 姿态信息，形状为 (batch_size,)
+    :param device: 设备
+    :return: 姿态编码，形状为 (batch_size, 4)
+    """
+    return ori.unsqueeze(-1).to(device)
+    # att_encode = torch.stack([torch.cos(ori), -torch.sin(ori), torch.sin(ori), torch.cos(ori)], dim=1).to(device) + 0.
+    # return att_encode
 
 if __name__ == '__main__':
     ori = torch.tensor([3.141592653589793, 0, 3.141592653589793*0.5])

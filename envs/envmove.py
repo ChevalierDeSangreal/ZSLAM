@@ -4,12 +4,13 @@ from utils.plot import bool_tensor_visualization
 from utils.geometry import get_circle_points, get_line_points, transformation, transformation_back, trans_simple, trans_simple_back
 from utils import batch_theta_to_rotation_matrix, batch_theta_to_orientation_vector
 from utils import position_encode, pos_encode, attitude_encode
+from utils import pos_encode_test_1
 from typing import List
 import math
 from cfg import *
 
 class Agent:
-    def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu'):
+    def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu', dtype=torch.float32):
         """
         初始化无人机代理 配置相机参数 配置无人机参数 配置无人机位置和朝向
 
@@ -40,38 +41,39 @@ class Agent:
 
         self.batch_size = batch_size
         self.device = device
+        self.dtype = dtype
 
-        self.dt = torch.tensor(dt, dtype=torch.float, device=device)
+        self.dt = torch.tensor(dt, dtype=dtype, device=device)
         
         # 将所有浮点数转换为 tensor.float 类型
-        self.f = torch.tensor(agent_cfg.f, dtype=torch.float, device=device)
-        self.field = torch.tensor(agent_cfg.field, dtype=torch.float, device=device)
+        self.f = torch.tensor(agent_cfg.f, dtype=dtype, device=device)
+        self.field = torch.tensor(agent_cfg.field, dtype=dtype, device=device)
         self.w = agent_cfg.w
-        self.field_radius = torch.tensor(agent_cfg.field_radius, dtype=torch.float, device=device)
+        self.field_radius = torch.tensor(agent_cfg.field_radius, dtype=dtype, device=device)
         
-        self.pos = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+        self.pos = torch.zeros((batch_size, 2), dtype=dtype, device=device)
         # 随机初始化ori（若未提供）
-        self.ori = torch.tensor(ori, dtype=torch.float, device=device).expand(batch_size) if ori is not None else torch.rand((batch_size, ), dtype=torch.float, device=device) * 2 * math.pi
+        self.ori = torch.tensor(ori, dtype=dtype, device=device).expand(batch_size) if ori is not None else torch.rand((batch_size, ), dtype=dtype, device=device) * 2 * math.pi
         
         # print("Shape of ori:", self.ori.shape)
 
         # 计算旋转矩阵和方向向量
-        self.R = batch_theta_to_rotation_matrix(self.ori)
-        self.ori_vector = batch_theta_to_orientation_vector(self.ori)
+        self.R = batch_theta_to_rotation_matrix(self.ori).to(dtype)
+        self.ori_vector = batch_theta_to_orientation_vector(self.ori).to(dtype)
         # print("Shape of ori_vector:", self.ori_vector.shape)
         # 计算安全半径
-        self.safe_radius = torch.tensor(agent_cfg.safe_radius, dtype=torch.float, device=device) if agent_cfg.safe_radius is not None else self.f / torch.sin(0.5 * self.field)
+        self.safe_radius = torch.tensor(agent_cfg.safe_radius, dtype=dtype, device=device) if agent_cfg.safe_radius is not None else self.f / torch.sin(0.5 * self.field)
 
-        self.vel = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
-        self.acc = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
-        self.prefer_acc = torch.rand((batch_size, 2), dtype=torch.float, device=device)
-        self.att_vel = torch.zeros((batch_size,), dtype=torch.float, device=device)
-        self.att_acc = torch.zeros((batch_size,), dtype=torch.float, device=device)
+        self.vel = torch.zeros((batch_size, 2), dtype=dtype, device=device)
+        self.acc = torch.zeros((batch_size, 2), dtype=dtype, device=device)
+        self.prefer_acc = torch.rand((batch_size, 2), dtype=dtype, device=device)
+        self.att_vel = torch.zeros((batch_size,), dtype=dtype, device=device)
+        self.att_acc = torch.zeros((batch_size,), dtype=dtype, device=device)
 
-        self.att_acc_timer = torch.zeros((batch_size,), dtype=torch.int, device=device) # 计时器，记录角加速度未变化的时间
+        self.att_acc_timer = torch.zeros((batch_size,), dtype=dtype, device=device) # 计时器，记录角加速度未变化的时间
         self.att_acc_change_time = torch.randint(agent_cfg.min_att_acc_change_step, agent_cfg.max_att_acc_change_step, (batch_size,), device=device) # 角加速度变化时间间隔
 
-        self.desired_pos = torch.zeros((batch_size, 2), dtype=torch.float, device=device)
+        self.desired_pos = torch.zeros((batch_size, 2), dtype=dtype, device=device)
 
     def step(self):
         # 根据当前加速度和角加速度更新速度、角速度、位置和朝向
@@ -96,18 +98,17 @@ class Agent:
     def reset_idx(self, idx, init_pos, desired_pos):
         num_reset = len(idx)
         # 随机初始化无人机初始位置和姿态
-        self.ori[idx] = torch.rand((num_reset, ), dtype=torch.float, device=self.device) * 2 * math.pi
-        self.R[idx] = batch_theta_to_rotation_matrix(self.ori[idx])
-        self.ori_vector[idx] = batch_theta_to_orientation_vector(self.ori[idx])
+        self.ori[idx] = torch.rand((num_reset, ), dtype=self.dtype, device=self.device) * 2 * math.pi
+        self.R[idx] = batch_theta_to_rotation_matrix(self.ori[idx]).to(self.dtype)
+        self.ori_vector[idx] = batch_theta_to_orientation_vector(self.ori[idx]).to(self.dtype)
         # print("Shape of ori_vector:", self.ori_vector.shape)
         self.pos[idx] = init_pos[idx]
         self.vel[idx] = 0
         self.att_vel[idx] = 0
 
-        self.prefer_acc = torch.rand((num_reset, 2), dtype=torch.float, device=self.device) * 2 - 1
+        self.prefer_acc = torch.rand((num_reset, 2), dtype=self.dtype, device=self.device) * 2 - 1
         self.att_acc_timer[idx] = 0
         self.att_acc_change_time[idx] = torch.randint(self.cfg.min_att_acc_change_step, self.cfg.max_att_acc_change_step, (num_reset,), device=self.device)
-
         self.desired_pos[idx] = desired_pos[idx]
     
 
@@ -118,7 +119,9 @@ class EnvMove:
             self, 
             batch_size:int,
             resolution_ratio=0.0,
+            map_type='prime_maze',
             device="cpu",
+            dtype=torch.float32
             ):
         # 初始化环境之后得手动调用一次reset，用于生成智能体状态、更新可视范围
         # resolution_ratio < 0 不渲染
@@ -129,13 +132,14 @@ class EnvMove:
         """
         self.batch_size = batch_size
         self.device = device
+        self.dtype = dtype
 
         self.cfg = EnvMoveCfg()
-
-        self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device)
+        self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device, dtype=dtype)
 
         self.map = Map(self.cfg.map_cfg)
-        self.map.random_initialize()
+        #self.map.random_initialize()
+        self.map.initialize(map_type=map_type)
 
         self.__resolution_ratio = resolution_ratio
 
@@ -167,15 +171,16 @@ class EnvMove:
         # n_theta = min(n_theta, 2 * (self.W + self.H))
         # self.n_theta = n_theta
         # print(self.n_theta)
-        self.map_center = torch.tensor([self.W//2, self.H//2], dtype=torch.float32, device=self.device)
+        self.map_center = torch.tensor([self.W//2, self.H//2], dtype=self.dtype, device=self.device)
         if len(self.map.circle_center_array) != 0:
-            self.circle_center = torch.stack(self.map.circle_center_array).to(self.device)
-            self.circle_radius = torch.stack(self.map.circle_radius_array).to(self.device)
+            self.circle_center = torch.stack(self.map.circle_center_array).to(self.dtype).to(self.device)
+            self.circle_radius = torch.stack(self.map.circle_radius_array).to(self.dtype).to(self.device)
         if len(self.map.line_array) != 0:
-            self.line = torch.stack(self.map.line_array).to(self.device)
+            self.line = torch.stack(self.map.line_array).to(self.dtype).to(self.device)
         if len(self.map.triangle_point_array) != 0:
-            self.triangle_points = torch.stack(self.map.triangle_point_array).to(self.device)
+            self.triangle_points = torch.stack(self.map.triangle_point_array).to(self.dtype).to(self.device)
         points_all, points_no_obstacle, points_obs, point_mask_obstacle, grid, grid_mask_obstacle = self.get_map_grid(self.map)
+        #print(points_all.dtype, points_no_obstacle.dtype, points_obs.dtype, point_mask_obstacle.dtype, grid.dtype, grid_mask_obstacle.dtype)
 
         # 这里需要用transformation_back是因为从(0, 0)(W, H)平移到(-W/2, -H/2)(W/2, H/2)的坐标系
         # 下面这几个都是[batch_size, number of points, 2]的点集，其中2是float形式的物理xy坐标
@@ -270,16 +275,15 @@ class EnvMove:
         return safe_points, safe_grid_mask
 
     def is_collision(self):
-        # origins = torch.stack([camera.position.unsqueeze(0).to(self.device) for camera in self.cameras], dim=0)
-        # r = torch.tensor([camera.safe_radius for camera in self.cameras], device=self.device).unsqueeze(-1).unsqueeze(-1)
         origins = self.agent.pos.unsqueeze(1)
-        # print("??????????????", origins.shape)
-        r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1)
-        # r = 0
         is_collision = torch.zeros((self.batch_size,), dtype=torch.bool, device=self.device)
+        r = self.agent.safe_radius.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         if len(self.map.circle_center_array) != 0:
-            distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
-            sign = (distance - r - self.circle_radius <=  0)
+            d2 = ((self.circle_center - origins)**2).sum(dim=-1)
+            r2 = (r + self.circle_radius) ** 2
+            sign = (d2.unsqueeze(-1) - r2) <= 0
+            #distance = torch.norm(self.circle_center-origins, dim=-1, keepdim=True)
+            #sign = (distance - r - self.circle_radius <=  0)
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False)
 
         if len(self.map.line_array) != 0:
@@ -295,17 +299,6 @@ class EnvMove:
             h = s / torch.norm(d, dim=-1, keepdim=True)
             sign |= (sign_mask & (h - r <= 0))
             is_collision |= sign.squeeze(-1).any(dim=-1, keepdim=False) 
-            # a = torch.sum(d * d, dim=-1)
-            # b = 2 * torch.sum(f * d, dim=-1)
-            # c = torch.sum(f * f, dim=-1) - r.squeeze(-1) ** 2
-            # sign = (b**2 - 4*a*c) >= 0
-
-        # if is_collision[1]:
-        #     print(self.agent.pos[1])
-        #     # print(self.line[11])
-        #     collision_lines = torch.nonzero(sign, as_tuple=True)[1]
-        #     print("Collision with line indices:", collision_lines.tolist())  # 打印发生碰撞的线的索引
-        #     print("Collision with line!!!")
 
         if len(self.map.triangle_point_array) != 0:
             triangle = self.triangle_points.unsqueeze(0)
@@ -341,11 +334,12 @@ class EnvMove:
         f = self.agent.f.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) # 1, 1, 1
         field = self.agent.field.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) # 1, 1, 1
         field = torch.tan(field * 0.5) # 1, 1, 1
-        t = torch.linspace(0, 1, w, device=self.device).unsqueeze(0) # 1, w
+        t = torch.linspace(0, 1, w, device=self.device, dtype=self.dtype).unsqueeze(0) # 1, w
         v = torch.stack([orientations[..., 1], -orientations[..., 0]], dim=-1) # B, 1, 2
         v = f * field * v # B, 1, 2
         d = origins + f * orientations - v # B, 1, 2
         pixels = d + t.unsqueeze(-1) * 2 * v # B, w, 2
+        # print(origins.dtype, orientations.dtype, f.dtype, field.dtype, t.dtype, v.dtype, d.dtype, pixels.dtype)
         
         return origins, pixels
     
@@ -358,9 +352,9 @@ class EnvMove:
         B = self.batch_size
         origins, pixels = self.get_image_pixels(w) # origins: B, 1, 2 pixels: B, w, 2
         d = pixels - origins # B, w, 2
-        #print()
+        #print(d.dtype)
         d_norm = torch.norm(d, dim=-1, keepdim=False) # B, w
-        img = torch.full((B, w), float('inf'), device=self.device)
+        img = torch.full((B, w), float('inf'), device=self.device, dtype=self.dtype)
         
         d = d.unsqueeze(2) # B, w, 1, 2
         if len(self.map.circle_center_array) != 0:
@@ -388,9 +382,8 @@ class EnvMove:
             del circle_center, circle_radius, delta, a, b, c, discriminant, valid, sqrt_discriminant, t1, t2, t
             torch.cuda.empty_cache()
             #img, _ = torch.min(t.squeeze(-1), dim=-1) # B, w
-
         if len(self.map.line_array) != 0:
-            line = torch.stack(self.map.line_array).to(self.device) # N, 2, 2
+            line = torch.stack(self.map.line_array).to(self.dtype).to(self.device) # N, 2, 2
             p, q = line[:, 0, :], line[:, 1, :]
 
             e = (q - p).unsqueeze(0).unsqueeze(0)
@@ -446,21 +439,25 @@ class EnvMove:
         ratio = map.ratio
         H, W = int(map.height/ratio), int(map.width/ratio)
         
-        center = torch.tensor([W//2, H//2], dtype=torch.float32, device=self.device)
+        center = torch.tensor([W//2, H//2], dtype=self.dtype, device=self.device)
         
-        x = torch.arange(W, dtype=torch.float32, device=self.device).view(W, 1).expand(W, H)
-        y = torch.arange(H, dtype=torch.float32, device=self.device).view(1, H).expand(W, H)
+        x = torch.arange(W, dtype=self.dtype, device=self.device).view(W, 1).expand(W, H)
+        y = torch.arange(H, dtype=self.dtype, device=self.device).view(1, H).expand(W, H)
         
         points = torch.stack([x, y], dim=-1).reshape(-1, 2) # WH, 2
         mask = torch.zeros(H * W, dtype=torch.bool, device=self.device)
         
         if len(map.circle_center_array) != 0:
-            circle_center = torch.stack(map.circle_center_array).to(self.device) / ratio
-            circle_radius = torch.stack(map.circle_radius_array).to(self.device) / ratio
+            circle_center = torch.stack(map.circle_center_array).to(self.dtype).to(self.device) / ratio
+            circle_radius = torch.stack(map.circle_radius_array).to(self.dtype).to(self.device) / ratio
             circle_center = trans_simple(circle_center, center)
-            d = torch.cdist(points, circle_center)
+
+            d2 = ((points.unsqueeze(1) - circle_center.unsqueeze(0)) ** 2).sum(dim=-1)
+            in_circle = (d2 <= circle_radius.squeeze(-1) ** 2).any(dim=1)
         
-            in_circle = (d <= circle_radius.T).any(dim=1)
+            # d = torch.cdist(points, circle_center)
+            # in_circle = (d <= circle_radius.T).any(dim=1)
+
             mask |= in_circle
         
         if len(map.triangle_point_array) != 0:
@@ -510,6 +507,7 @@ class EnvMove:
         #points = points.reshape(B, self.W, self.H, 2)
         #points = torch.flip(points, dims=[2]) # B, W, H, 2
         
+        #print(pixels.dtype, origins.dtype)
         vp = pixels - origins
         vp_norm = vp / (torch.norm(vp, dim=-1, keepdim=True).clamp_min(1e-6))
         # ap_cos = torch.sum(vp_norm * ori_vec, dim=-1)
@@ -706,7 +704,7 @@ class EnvMove:
         mask_change = self.agent.att_acc_timer >= self.agent.att_acc_change_time
         # print(self.agent.att_acc[mask_change].shape, ((torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc).shape)
         # $$$$$ Do not change att_acc by now
-        self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum()), device=self.device) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
+        self.agent.att_acc[mask_change] = (torch.rand((mask_change.sum()), device=self.device, dtype=self.dtype) * 2 - 1) * self.cfg.agent_cfg.max_att_acc
         self.agent.att_acc.zero_()
         self.agent.att_acc_timer[mask_change] = 0
 
@@ -745,6 +743,16 @@ class EnvMove:
         角度均匀采样 N 条射线，idx shape 为 (B, N, 2) 代表每个 batch 上每条射线对应的最近边界点索引。
         dir_mask 表示每条射线经过哪些网格点。
         """
+                
+        # torch.cuda.reset_peak_memory_stats()
+        # start_mem = torch.cuda.memory_allocated() / 1024**2
+        # print(f"[开始] 当前分配显存: {start_mem:.2f} MB")
+
+        # end_mem = torch.cuda.memory_allocated() / 1024**2
+        # peak_mem = torch.cuda.max_memory_allocated() / 1024**2
+        # print(f"[结束] 当前分配显存: {end_mem:.2f} MB")
+        # print(f"[峰值] 最大分配显存: {peak_mem:.2f} MB")
+
         W, H, B = self.W, self.H, self.batch_size
 
         # 网格坐标与机器人位置
@@ -812,6 +820,63 @@ class EnvMove:
         batch_idx = torch.arange(B, device=self.device).unsqueeze(1).expand(B, N)
 
         idx = torch.stack([x, y], dim=-1)  # (B, N, 2)
+        # W, H, B = self.W, self.H, self.batch_size
+
+        # # 网格坐标与机器人位置
+        # points  = self.grid_map.unsqueeze(0)                 # (1, W, H, 2)
+        # origins = self.agent.pos.unsqueeze(1).unsqueeze(1)   # (B, 1, 1, 2)
+        # dp      = points - origins                          # (B, W, H, 2)
+        # d2      = (dp[...,0]**2 + dp[...,1]**2).view(B, W*H)             # (B, W, H)
+        # # print(points[0, 0, 0]
+        # # 直接使用 self.__ratio 作为单元格边长（float，单位 m）
+        # # 单元对角线半长 = ratio * sqrt(2) / 2
+        # threshold = self.__ratio * (2 ** 0.5) / 2
+
+        # # 构造 N 条射线方向的单位向量
+        # angles = torch.arange(N, device=self.device, dtype=dp.dtype) * (2 * math.pi / N)
+        # u = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)  # (N, 2)
+
+        # # 投影长度 和 垂直距离
+        # proj = torch.einsum('bwhc, nc->bnwh', dp, u).view(B, N, W*H)     # (B, N, W*H)
+        # dp = dp.view(B, W*H, 2) # (B, W*H, 2)
+        # perp = (dp[...,0].unsqueeze(1) * u[..., 1].unsqueeze(0).unsqueeze(-1) - dp[..., 1].unsqueeze(1) * u[..., 0].unsqueeze(0).unsqueeze(-1)).abs() # 叉积绝对值
+
+        # # dir_mask：射线 k 穿过单元 (i,j) 当且仅当 proj>=0 且 perp<=threshold
+        # # 剔除当前所在点
+        # dir_mask = (proj >= 0) & (perp <= threshold)
+        # # print(dir_mask[0, 0, :, :].any())
+        # # 与原来不可见区域结合，找出每条射线上第一个不可见的点
+        # invisible_mask = ~(self.grid_mask_visible.view(B, W*H)).unsqueeze(1)  # (B, 1, W*H)
+        # valid_mask     = dir_mask & invisible_mask            # (B, N, W*H)
+        # # print(valid_mask[0, 0, :, :].any())
+
+        # # —— 新增：处理“无击中”情况 —— #
+        # # 标记哪些射线根本没有击中
+        # no_hit = ~valid_mask.any(dim=2)  # (B, N)
+
+        # if no_hit.any():
+        #     # 对于这些射线，在 dir_mask 范围内找最大 proj
+        #     # 将非 dir_mask 部分的 proj 置为 -inf，保证 argmax 落在 dir_mask 区域
+        #     neg_inf = float('-inf')
+        #     proj_masked = proj.masked_fill(~dir_mask, neg_inf)
+        #     # 找到最远点的平坦索引
+        #     far_idx = proj_masked.argmax(dim=2)  # (B, N)
+            
+        #     b_idx, n_idx = torch.nonzero(no_hit, as_tuple=True)
+        #     valid_mask[b_idx, n_idx, far_idx[b_idx, n_idx]] = True
+
+        # # 将不合法位置设为无穷大距离，再沿每条射线取最小距离
+        # inf = float('inf')
+        # d2 = d2.unsqueeze(1).expand(-1, N, -1) # B, N, W*H
+        # d_masked = torch.where(valid_mask, d2, inf)
+        # _, flat_idx = d_masked.min(dim=2)  # (B,N)
+        # # print(d_masked[0, :, 0, 0])
+        # # 转回二维索引
+        # x = flat_idx // H
+        # y = flat_idx %  H
+        # batch_idx = torch.arange(B, device=self.device).unsqueeze(1).expand(B, N)
+
+        # idx = torch.stack([x, y], dim=-1)  # (B, N, 2)
         # 这块代码用来判断边界点是未知还是障碍物
         # batch_idx = torch.arange(B).unsqueeze(1).expand(B, N)
         # r, c = idx[..., 0], idx[..., 1]
@@ -902,7 +967,7 @@ class EnvMove:
         dx, dy = relative_coord[..., 0], relative_coord[..., 1]
         # dist = dx**2 + dy**2 # B, N
         dist = torch.sqrt(dx**2 + dy**2)
-        ori = torch.atan2(dy.float(), dx.float()) # B, N
+        ori = torch.atan2(dy, dx) # B, N
         att_encode = attitude_encode(ori.reshape(-1), device=self.device).reshape(self.batch_size, N, -1)
         return {
             "batch_idx": batch_idx, # B, N
@@ -942,16 +1007,15 @@ class EnvMove:
         visible_region = self.grid_mask_visible[:, y_start:y_end, x_start:x_end]  # (B, s, s)
 
         # 计算每个 batch 的可见点数量
-        visible_count = visible_region.reshape(B, -1).sum(dim=1)  # (B, )
+        visible_count = visible_region.reshape(B, -1).sum(dim=1, dtype=self.dtype)  # (B, )
 
         # 计算探索度（可见点数 / 区域总像素数）
-        ground_truth = visible_count.float() / (square_size * square_size)  # (B, )
+        ground_truth = visible_count / (square_size * square_size)  # (B, )
 
         # 将中心点复制到 batch 维度
         center_coords = center_coords.expand(B, -1)  # (B, 2)
+        center_coords = self.grid_map[center_coords[:, 0], center_coords[:, 1], :]
         center_coord_encoded = position_encode(center_coords, device=device)
-
-
         return center_coords, center_coord_encoded, ground_truth
     
     def generate_ground_truth(self, square_size: int):
@@ -972,7 +1036,7 @@ class EnvMove:
         gt["local_gt_obstacle"] = local_gt["is_obstacle"].long()
 
         gt["local_gt_coord"] = local_gt["coord"]
-
+        # print(gt["global_explrate"].dtype, gt["global_query_encode"].dtype, gt["local_query_encode"].dtype, gt["local_gt_distance"].dtype, gt["local_gt_obstacle"].dtype, gt["local_gt_coord"].dtype)
         return gt
         
 
@@ -1035,8 +1099,10 @@ class EnvMove:
         step_output = {}
         step_output["image"], _ = self.get_images()
         step_output["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device)
+        step_output["agent_pos_encode_test"] = pos_encode_test_1(self.agent.pos, self.agent.ori, device=self.device)
         step_output["gt"] = gt
         step_output["idx_reset"] = idx_reset
+        #print(step_output["image"].dtype, step_output["agent_pos_encode"].dtype, step_output["agent_pos_encode_test"].dtype, step_output["idx_reset"].dtype)
 
         # _, _ = self.get_local_visible_boundary(N=40)
 

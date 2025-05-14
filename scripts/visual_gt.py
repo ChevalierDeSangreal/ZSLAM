@@ -73,7 +73,7 @@ if __name__ == '__main__':
 
     # 加载环境
     batch_size = 2
-    env = EnvMove(batch_size=batch_size, resolution_ratio=0, device=device)
+    env = EnvMove(batch_size=batch_size, resolution_ratio=0, device=device, dtype=torch.float32)
 
     # 加载模型
     model = ZSLAModelVer2(image_dim=512, hidden_dim=256, query_num=10, num_classes=2, device=device)

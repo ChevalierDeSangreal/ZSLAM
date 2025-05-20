@@ -30,7 +30,7 @@ class MapCfg:
 
 
 class EnvPointNavCfg:
-    batch_size = 128
+    batch_size = 64
     device = 'cuda'
     dt = 0.02 # 时间步长
     agent_cfg: AgentCfg = AgentCfg()

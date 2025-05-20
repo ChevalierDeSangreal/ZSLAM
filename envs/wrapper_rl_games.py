@@ -35,17 +35,16 @@ for RL-Games :class:`Runner` class:
 from __future__ import annotations
 
 import gym.spaces  # needed for rl-games incompatibility: https://github.com/Denys88/rl_games/issues/261
-import gymnasium
 import torch
 
 from rl_games.common import env_configurations
 from rl_games.common.vecenv import IVecEnv
-from typing import Dict
+from typing import Dict, Union
 
 """
 Vectorized environment wrapper.
 """
-VecEnvObs = Dict[str, torch.Tensor | Dict[str, torch.Tensor]]
+VecEnvObs = Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]
 
 class RlGamesVecEnvWrapper(IVecEnv):
     """Wraps around Isaac Lab environment for RL-Games.
@@ -97,7 +96,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
         self._rl_device = rl_device
         # self._clip_obs = clip_obs
         # self._clip_actions = clip_actions
-        self._sim_device = env.decice
+        self._sim_device = env.device
         # information for privileged observations
         # if self.state_space is None:
         #     self.rlg_num_states = 0
@@ -141,7 +140,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
         # # note: maybe should check if we are a sub-set of the actual space. don't do it right now since
         # #   in ManagerBasedRLEnv we are setting action space as (-inf, inf).
         # return gym.spaces.Box(-self._clip_obs, self._clip_obs, policy_obs_space.shape)
-        return self.envs.observation_space
+        return self.env.observation_space
 
     @property
     def action_space(self) -> gym.Space:
@@ -342,4 +341,5 @@ class RlGamesGpuEnv(IVecEnv):
         Returns:
             The Gym spaces for the environment.
         """
+        # print(type(self.env))
         return self.env.get_env_info()

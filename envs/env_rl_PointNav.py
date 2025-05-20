@@ -8,8 +8,8 @@ from typing import List
 import math
 from cfg import *
 import numpy as np
-import gymnasium as gym
-from gymnasium import spaces
+import gym
+from gym import spaces
 
 class Agent:
     def __init__(self, agent_cfg:AgentCfg, batch_size, dt=0.02, ori=None, device='cpu'):
@@ -1110,7 +1110,7 @@ class EnvPointNavVer0():
         info["reward"] = reward
         info["done"] = done
 
-        state = torch.cat([info["image"], info["agent_pos_encode"]], info["target_pos_encode"], dim=1)
+        state = torch.cat((info["image"], info["agent_pos_encode"], info["target_pos_encode"]), dim=1)
         state_dict = {"policy": state} # align with isaac lab env
         # _, _ = self.get_local_visible_boundary(N=40)
 

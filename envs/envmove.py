@@ -119,6 +119,8 @@ class EnvMove:
             self, 
             batch_size:int,
             resolution_ratio=0.0,
+            config=EnvMoveCfg(),
+            agent=None,
             device="cpu",
             ):
         # 初始化环境之后得手动调用一次reset，用于生成智能体状态、更新可视范围
@@ -131,9 +133,11 @@ class EnvMove:
         self.batch_size = batch_size
         self.device = device
 
-        self.cfg = EnvMoveCfg()
-
-        self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device)
+        self.cfg = config
+        if agent is None:
+            self.agent = Agent(self.cfg.agent_cfg, batch_size, dt=self.cfg.dt, device=device)
+        else:
+            self.agent = agent
 
         self.map = Map(self.cfg.map_cfg)
         self.map.random_initialize()

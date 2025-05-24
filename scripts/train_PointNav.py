@@ -64,7 +64,7 @@ if __name__ == '__main__':
 
 
         rl_device = 'cuda:0'
-        env = EnvPointNavVer0()
+        env = EnvPointNavVer0_1()
         wrapped_env = RlGamesVecEnvWrapper(env, rl_device)
         vecenv.register(
             "IsaacRlgWrapper", lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs)

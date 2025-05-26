@@ -163,7 +163,7 @@ class EnvPointNavVer0_1(EnvMove):
             device=cfg.device)
         self.action_space = spaces.Discrete(4) # 0: stop, 1: move, 2: left, 3: right
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.agent.w + 16 + 12,), dtype=np.float32) # 深度相机像素数+自身位姿编码+目标点位置编码
-
+        
     
     def get_done(self, action):
         """
@@ -277,7 +277,6 @@ class EnvPointNavVer0_1(EnvMove):
 
     def close(self):
         return None
-
 
 
 class EnvPointNavVer0():

@@ -148,7 +148,11 @@ class Agent:
 
         self.num_step[idx] = 0
 
-class EnvPointNavVer0_1(EnvMove):
+class EnvPointNavVer0_2(EnvMove):
+    """
+    Based on EnvPointNavVer0_2
+    modify step output to align with rl_games framework
+    """
     def __init__(
             self,
             resolution_ratio=0.0,):
@@ -163,7 +167,143 @@ class EnvPointNavVer0_1(EnvMove):
             device=cfg.device)
         self.action_space = spaces.Discrete(4) # 0: stop, 1: move, 2: left, 3: right
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.agent.w + 16 + 12,), dtype=np.float32) # 深度相机像素数+自身位姿编码+目标点位置编码
-        
+
+    
+    def get_done(self, action):
+        """
+        终止条件：
+        1. 距离目标点小于某一范围并且动作为静止
+        2. 到达最大步数
+        3. 碰撞
+        返回:
+            reset_mask: shape (batch_size,) 的布尔 tensor，指示哪些 agent 已终止
+            reset_idx: shape (num_done,) 的 tensor，指示哪些 agent 已终止
+            info: dict 包含各类终止原因的 mask，可用于分析或后续处理
+        """
+        # 碰撞
+        mask_collision = self.is_collision()  # shape: (batch_size,), bool tensor
+
+        # 超时
+        mask_timeout = self.agent.num_step >= self.agent.max_num_step  # shape: (batch_size,)
+
+        # 到达目标并静止 (action == 0)
+        # 计算当前位置到目标位置的欧氏距离
+        dist = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
+        mask_reached = (dist <= self.cfg.success_radius) & (action == 0)
+
+        # 综合终止条件
+        reset_mask = mask_collision | mask_timeout | mask_reached
+        reset_idx = torch.nonzero(reset_mask, as_tuple=False).squeeze(1)
+
+        # 信息字典
+        info = {
+            'collision': mask_collision,
+            'timeout': mask_timeout,
+            'reached': mask_reached
+        }
+        return reset_mask, reset_idx, info    
+
+    def get_reward(self, dist_before_step, dist_after_step, mask_reach):
+        """
+        计算奖励函数
+        """
+        reward = torch.zeros(self.batch_size, dtype=torch.float, device=self.device)
+
+        # geodesic 距离减少值
+        delta_geo = dist_before_step - dist_after_step
+
+        # 步进奖励: -Δgeo_dist - 0.01
+        reward += delta_geo - 0.01  # 即 - ( -delta_geo - 0.01 )
+
+        reward[mask_reach] = 2.5
+
+        return reward
+
+    def step(self, action):
+        """
+        输出与isaac lab的DirectRLEnv一致: 
+        state: VecEnvObs | None
+        reward: torch.Tensor
+        reset_terminated: torch.Tensor in (num_envs,)
+        reset_timeout: torch.Tensor in (num_envs,)
+        info: dict
+        """
+
+        dist_before_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
+
+        # self.update_acc_attacc()
+        self.agent.step(action)
+        #self.update_grid_mask_visible_()
+        self.update_grid_mask_visible()
+
+        dist_after_step = torch.norm(self.agent.pos - self.agent.desired_pos, dim=1)  # shape: (batch_size,)
+
+        done, idx_reset, info = self.get_done(action)
+        reset_timeout = info["timeout"]
+        reset_terminated = info["collision"] | info["reached"]
+
+        self.reset_idx(idx_reset)
+
+        reward = self.get_reward(dist_before_step, dist_after_step, info['reached'])
+        # gt = self.generate_ground_truth(self.cfg.agent_cfg.global_quary_square_size)
+
+        info = {}
+        info["image"], _ = self.get_images()
+        info["agent_pos_encode"] = pos_encode(self.agent.pos, self.agent.ori, device=self.device) # B, 16
+        info["target_pos_encode"] = position_encode(self.agent.desired_pos, device=self.device) # B, 12
+        # info["gt"] = gt
+        info["idx_reset"] = idx_reset
+        info["reward"] = reward
+        info["done"] = done
+
+        state = torch.cat((info["image"], info["agent_pos_encode"], info["target_pos_encode"]), dim=1)
+        # state = {"image": info["image"], "agent_pos_encode": info["agent_pos_encode"], "target_pos_encode": info["target_pos_encode"]}
+        # state["done"] = done
+        state_dict = {"policy": state} # align with isaac lab env
+        # _, _ = self.get_local_visible_boundary(N=40)
+
+        return state_dict, reward, reset_timeout, reset_terminated, info
+
+    def reset(self, change_map=False):
+        super().reset(change_map=change_map)
+        image, _ = self.get_images() # B, w
+        agent_pos_encode = pos_encode(self.agent.pos, self.agent.ori, device=self.device) # B, 16
+        target_pos_encode = position_encode(self.agent.desired_pos, device=self.device) # B, 12
+
+        state = torch.cat([image, agent_pos_encode, target_pos_encode], dim=1)
+        # state = {"image": image, "agent_pos_encode": agent_pos_encode, "target_pos_encode": target_pos_encode}
+        info = {}
+        state_dict = {"policy": state} # align with isaac lab env
+        # print(state.shape)
+        return state_dict, info
+
+    def seed(self, seed):
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # 如果使用 GPU，确保所有 CUDA 设备的随机性固定
+        np.random.seed(seed)
+
+    def close(self):
+        return None
+
+class EnvPointNavVer0_1(EnvMove):
+    """
+    Sucess from EnvMove class
+    """
+    def __init__(
+            self,
+            resolution_ratio=0.0,):
+        self.env_name = "PointNavVer0"
+        cfg = EnvPointNavCfg()
+        agent = Agent(cfg.agent_cfg, cfg.batch_size, dt=cfg.dt, device=cfg.device)
+        super().__init__(
+            batch_size=cfg.batch_size,
+            resolution_ratio=resolution_ratio,
+            config=cfg,
+            agent=agent,
+            device=cfg.device)
+        self.action_space = spaces.Discrete(4) # 0: stop, 1: move, 2: left, 3: right
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.agent.w + 16 + 12,), dtype=np.float32) # 深度相机像素数+自身位姿编码+目标点位置编码
+
     
     def get_done(self, action):
         """
@@ -277,6 +417,7 @@ class EnvPointNavVer0_1(EnvMove):
 
     def close(self):
         return None
+
 
 
 class EnvPointNavVer0():

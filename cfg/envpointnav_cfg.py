@@ -1,4 +1,5 @@
 import math
+import torch
 
 class AgentCfg:
     f = 0.05 # 相机焦距
@@ -38,3 +39,7 @@ class EnvPointNavCfg:
     map_cfg: MapCfg = MapCfg()
 
     success_radius = 0.5
+
+    output_dtype = torch.float32
+    env_dtype = torch.float16
+

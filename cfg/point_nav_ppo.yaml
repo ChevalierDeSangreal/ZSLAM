@@ -31,7 +31,7 @@ params:
         gain: 1.41421356237
 
   config:
-    name: PongNoFrameskip_ray
+    name: NavPointSimpleVer0
     env_name: rlgpu
     score_to_win: 20.0
     normalize_value: True
@@ -58,7 +58,7 @@ params:
     minibatch_size: 2048
     mini_epochs: 4
     critic_coef: 2
-    max_epochs: 500
+    max_epochs: 50000
     use_diagnostics: False
 
     env_config:

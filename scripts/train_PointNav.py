@@ -16,7 +16,9 @@ torch.backends.cudnn.enabled = False
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-
+"""
+python train_PointNav.py --train --file ../cfg/point_nav_ppo.yaml 
+"""
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()

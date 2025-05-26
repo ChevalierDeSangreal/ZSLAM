@@ -283,7 +283,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
         # clip the observations
         # obs = torch.clamp(obs, -self._clip_obs, self._clip_obs)
         # move the buffer to rl-device
-        obs = obs.to(device=self._rl_device).clone()
+        # obs = obs.to(device=self._rl_device).clone()
 
         # # check if asymmetric actor-critic or not
         # if self.rlg_num_states > 0:

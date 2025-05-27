@@ -41,6 +41,9 @@ from rl_games.common import env_configurations
 from rl_games.common.vecenv import IVecEnv
 from typing import Dict, Union
 
+from utils import *
+import imageio
+
 """
 Vectorized environment wrapper.
 """
@@ -97,6 +100,9 @@ class RlGamesVecEnvWrapper(IVecEnv):
         # self._clip_obs = clip_obs
         # self._clip_actions = clip_actions
         self._sim_device = env.device
+        self.frames = []  # used for rendering
+        self._render_enabled = False
+        self._frame_count = 0
         # information for privileged observations
         # if self.state_space is None:
         #     self.rlg_num_states = 0
@@ -260,6 +266,52 @@ class RlGamesVecEnvWrapper(IVecEnv):
     def close(self):  # noqa: D102
         return self.env.close()
 
+    def enable_render(self):
+        self._render_enabled = True
+        self.frames = []
+        self._frame_count = 0
+        return
+
+    def disable_render(self):
+        self._render_enabled = False
+        return
+
+    def stop_and_save(self, path, filename, fps=10):
+        if not self.frames:
+            return
+        save_path = f"{path}/{filename}"
+        imageio.mimsave(save_path, self.frames, fps=10)
+        self.frames = []
+        return
+    
+    def render(self, mode:str="human"):
+        if not self._render_enabled:
+            return
+        
+        free_points = self.env.points_no_obstacle
+        obstacle_points = self.env.points_obstacle
+        safe_points = self.env.points_safe
+
+        desired_pos = self.env.get_desired_pos()[0]
+        agent_pos = self.env.agent.pos[0]
+
+        center = self.env.map_center
+        ratio = self.env.get_ratio()
+
+        canvas = visualize_env_map(
+            free_points, 
+            obstacle_points, 
+            safe_points, 
+            desired_pos, 
+            agent_pos, 
+            ratio, 
+            center,
+            canvas_size=256, 
+            device=self._sim_device)
+        
+        self.frames.append(canvas)
+        return
+
     """
     Helper functions
     """
@@ -283,7 +335,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
         # clip the observations
         # obs = torch.clamp(obs, -self._clip_obs, self._clip_obs)
         # move the buffer to rl-device
-        obs = obs.to(device=self._rl_device).clone()
+        # obs = obs.to(device=self._rl_device).clone()
 
         # # check if asymmetric actor-critic or not
         # if self.rlg_num_states > 0:
@@ -300,6 +352,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
         #     return {"obs": obs, "states": states}
         # else:
         return obs
+    
 
 
 """

@@ -66,12 +66,15 @@ if __name__ == '__main__':
 
 
         rl_device = 'cuda:0'
-        env = EnvPointNavVer0()
+        env = EnvPointNavVer0_1()
         wrapped_env = RlGamesVecEnvWrapper(env, rl_device)
         vecenv.register(
-            "IsaacRlgWrapper", lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs)
+            "IsaacRlgWrapper", 
+            lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs)
         )
-        env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: wrapped_env})
+        env_configurations.register(
+            "rlgpu", 
+            {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: wrapped_env})
         runner = Runner()
         try:
             runner.load(config)
@@ -89,8 +92,15 @@ if __name__ == '__main__':
             monitor_gym=True,
             save_code=True,
         )
+    if args["play"]:
+        # 在测试模式下启用录制
+        wrapped_env.enable_render()
 
     runner.run(args)
+
+    if args["play"]:
+        # 测试结束后保存录像
+        wrapped_env.stop_and_save(path="outputs/plays/gif", filename="test.gif")
 
     try:
         import ray

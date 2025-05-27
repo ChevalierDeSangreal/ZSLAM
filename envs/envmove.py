@@ -140,7 +140,9 @@ class EnvMove:
             self.agent = agent
 
         self.map = Map(self.cfg.map_cfg)
-        self.map.random_initialize()
+        self.map_type = self.cfg.map_cfg.map_type
+        #self.map.random_initialize()
+        self.map.initialize(self.map_type)
 
         self.__resolution_ratio = resolution_ratio
 
@@ -199,7 +201,9 @@ class EnvMove:
         self.points_visible = torch.zeros(self.batch_size, self.W*self.H, dtype=torch.bool, device=self.device)
         self.grid_mask_visible = torch.zeros(self.batch_size, self.W, self.H, dtype=torch.bool, device=self.device)
         self.grid_visit_time = torch.zeros(size=(self.batch_size, self.W, self.H), dtype=torch.float32, device=self.device)
-        
+    
+    def get_ratio(self):
+        return self.__ratio
         
 
     def physical_to_matrix(self, physical_coords):

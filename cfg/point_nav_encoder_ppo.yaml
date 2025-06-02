@@ -55,7 +55,7 @@ params:
     clip_value: False
     num_actors: 64
     horizon_length: 128
-    minibatch_size: 2048
+    minibatch_size: 64
     mini_epochs: 4
     critic_coef: 2
     max_epochs: 50000

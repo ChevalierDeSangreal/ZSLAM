@@ -593,6 +593,11 @@ class ZSLAModelVer4(nn.Module):
 
         image_feature = self.image_encoder(image)  # [batch_size, 8]
         input_local_encoder = torch.cat((image_feature, agent_pos), dim=1)  # [batch_size, 20]
+        # print("????????????")
+        # print("h_local.shape", h_local.shape)
+        # print("h_global.shape", h_global.shape)
+        # print("local_encoder", self.local_encoder)
+        # print("input_local_encoder.shape", input_local_encoder.shape)
         input_local_encoder = input_local_encoder.unsqueeze(1)  # [batch_size, 1, 20]
         
         local_feature_seq, new_h_local = self.local_encoder(input_local_encoder, h_local)
@@ -619,8 +624,9 @@ class ZSLAModelVer4(nn.Module):
             return output_local_distance, output_local_class, output_global_exprate, new_h_local, new_h_global
 
         else:
+
             feature = torch.cat((local_feature, global_feature), dim=1)  # [batch_size, hidden_dim * 2]
-            return feature
+            return feature, new_h_local, new_h_global
 
         
     def save_model(self, path):

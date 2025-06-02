@@ -133,9 +133,11 @@ class EncoderA2CBuilder(NetworkBuilder):
                 'h_global': self.h_global_encoder
             }
 
-            encoder_output = self.encoder(inputs)
+            encoder_output, new_h_local, new_h_global = self.encoder(inputs)
+            self.h_local_encoder = new_h_local.detach()
+            self.h_global_encoder = new_h_global.detach()
 
-            agent_input = torch.cat((encoder_output, target_position_encode), dim=1)
+            agent_input = torch.cat((encoder_output.detach(), target_position_encode), dim=1)
             out = self.actor_mlp(agent_input)
             value = self.value_act(self.value(out))
 

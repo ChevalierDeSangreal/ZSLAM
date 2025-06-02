@@ -20,7 +20,7 @@ torch.backends.cudnn.deterministic = True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 """
-python tmp_train_encoder_PointNav.py --train --file ../cfg/point_nav_encoder_ppo.yaml 
+python train_encoder_PointNav.py --train --file ../cfg/point_nav_encoder_ppo.yaml 
 """
 
 if __name__ == '__main__':

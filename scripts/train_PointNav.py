@@ -57,12 +57,6 @@ if __name__ == '__main__':
 
         from rl_games.torch_runner import Runner
 
-        try:
-            import ray
-        except ImportError:
-            pass
-        else:
-            ray.init(object_store_memory=1024*1024*1000)
 
 
         rl_device = 'cuda:0'
@@ -102,12 +96,6 @@ if __name__ == '__main__':
         # 测试结束后保存录像
         wrapped_env.stop_and_save(path="outputs/plays/gif", filename="test.gif")
 
-    try:
-        import ray
-    except ImportError:
-        pass
-    else:
-        ray.shutdown()
 
     if args["track"] and global_rank == 0:
         wandb.finish()

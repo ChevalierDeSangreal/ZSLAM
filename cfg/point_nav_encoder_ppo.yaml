@@ -11,6 +11,8 @@ params:
     separate: False
     space: 
       discrete:
+    encoder_load_path: /home/core/wangzimo/ZSLAM/param/movingVer3.pth
+    image_size: 64
 
     mlp:
       type: mlp
@@ -29,6 +31,8 @@ params:
       initializer:
         name: orthogonal_initializer
         gain: 1.41421356237
+
+    
 
   config:
     name: NavPointSimpleVer0

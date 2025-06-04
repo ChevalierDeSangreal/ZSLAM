@@ -34,6 +34,9 @@ class EncoderA2CBuilder(NetworkBuilder):
             self.critic_mlp = nn.Sequential()
             # print("input_shape:", input_shape)
             self.encoder = ZSLAModelVer4()
+            if self.encoder_load_path is not None:
+                self.encoder.load_state_dict(torch.load(self.encoder_load_path))
+                print("Encoder loaded from:", self.encoder_load_path)
             input_shape = (self.encoder.hidden_dim * 2 + 12, ) # 2 * embedding_dim + 12 for target position encode
             # print("input_shape:", input_shape)
             
@@ -113,11 +116,9 @@ class EncoderA2CBuilder(NetworkBuilder):
             bptt_len = obs_dict.get('bptt_len', 0)
             
             # kind of stupid, hh
-            # print("obs type:", obs.type)
-            # print(obs)
-            image = obs[:, :512]
-            agent_pos_encode = obs[:, 512:528]
-            target_position_encode = obs[:, 528:]
+            image = obs[:, :self.image_size]
+            agent_pos_encode = obs[:, self.image_size:self.image_size+16]
+            target_position_encode = obs[:, self.image_size+16:]
 
             # encoder_input = torch.cat((image, agent_pos_encoded), dim=1)
             if dones is not None:
@@ -125,7 +126,8 @@ class EncoderA2CBuilder(NetworkBuilder):
                     self.h_local_encoder[dones] = 0
                 if self.h_global_encoder is not None:
                     self.h_global_encoder[dones] = 0
-
+            # print("obs shape:", obs.shape)
+            # print("image shape:", image.shape)
             inputs = {
                 'image': image,
                 'agent_pos_encode': agent_pos_encode,
@@ -134,10 +136,10 @@ class EncoderA2CBuilder(NetworkBuilder):
             }
 
             encoder_output, new_h_local, new_h_global = self.encoder(inputs)
-            self.h_local_encoder = new_h_local.detach()
-            self.h_global_encoder = new_h_global.detach()
+            # self.h_local_encoder = new_h_local.detach()
+            # self.h_global_encoder = new_h_global.detach()
 
-            agent_input = torch.cat((encoder_output.detach(), target_position_encode), dim=1)
+            agent_input = torch.cat((encoder_output, target_position_encode), dim=1)
             out = self.actor_mlp(agent_input)
             value = self.value_act(self.value(out))
 
@@ -201,6 +203,10 @@ class EncoderA2CBuilder(NetworkBuilder):
             self.has_space = 'space' in params
             self.central_value = params.get('central_value', False)
             self.joint_obs_actions_config = params.get('joint_obs_actions', None)
+        
+            self.encoder_load_path = params.get('encoder_load_path', None)
+            self.image_size = params.get('image_size', None)
+            assert self.image_size is not None, "image_size in cfg cannot be None"
 
             if self.has_space:
                 self.is_multi_discrete = 'multi_discrete'in params['space']

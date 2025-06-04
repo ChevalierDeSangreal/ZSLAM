@@ -499,7 +499,7 @@ class ZSLAModelVer4(nn.Module):
     """
     def __init__(
         self,
-        image_dim=512,      # 每帧输入的维度 深度相机像素数
+        image_dim=64,      # 每帧输入的维度 深度相机像素数
         hidden_dim=256,    # GRU 的隐状态维度
         query_num=10,      # 真值相片总像素数
         num_classes=2,     # 分类问题类别数：2 (对应 0, 1)

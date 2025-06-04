@@ -5,3 +5,4 @@ test_runs/
 *.pyc
 __pycache__/
 *.out
+scipts/runs/

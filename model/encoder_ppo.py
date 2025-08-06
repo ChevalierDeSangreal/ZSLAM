@@ -34,9 +34,10 @@ class EncoderA2CBuilder(NetworkBuilder):
             self.critic_mlp = nn.Sequential()
             # print("input_shape:", input_shape)
             self.encoder = ZSLAModelVer4()
-            if self.encoder_load_path is not None:
-                self.encoder.load_state_dict(torch.load(self.encoder_load_path))
-                print("Encoder loaded from:", self.encoder_load_path)
+            if self.load_from:
+                if self.encoder_load_path:
+                    self.encoder.load_state_dict(torch.load(self.encoder_load_path))
+                    print("Encoder loaded from:", self.encoder_load_path)
             input_shape = (self.encoder.hidden_dim * 2 + 12, ) # 2 * embedding_dim + 12 for target position encode
             # print("input_shape:", input_shape)
             
@@ -139,7 +140,7 @@ class EncoderA2CBuilder(NetworkBuilder):
             # self.h_local_encoder = new_h_local.detach()
             # self.h_global_encoder = new_h_global.detach()
 
-            agent_input = torch.cat((encoder_output, target_position_encode), dim=1)
+            agent_input = torch.cat((encoder_output.detach(), target_position_encode), dim=1)
             out = self.actor_mlp(agent_input)
             value = self.value_act(self.value(out))
 
@@ -204,6 +205,7 @@ class EncoderA2CBuilder(NetworkBuilder):
             self.central_value = params.get('central_value', False)
             self.joint_obs_actions_config = params.get('joint_obs_actions', None)
         
+            self.load_from = params.get('load', None)
             self.encoder_load_path = params.get('encoder_load_path', None)
             self.image_size = params.get('image_size', None)
             assert self.image_size is not None, "image_size in cfg cannot be None"

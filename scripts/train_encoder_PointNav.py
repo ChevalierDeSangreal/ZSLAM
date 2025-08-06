@@ -21,6 +21,8 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 """
 python train_encoder_PointNav.py --train --file ../cfg/point_nav_encoder_ppo.yaml 
+
+注意！目前不支持在下游任务时训练encoder。encoder不会被更新！
 """
 
 if __name__ == '__main__':

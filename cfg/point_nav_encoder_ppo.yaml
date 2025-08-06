@@ -11,7 +11,8 @@ params:
     separate: False
     space: 
       discrete:
-    encoder_load_path: /home/core/wangzimo/ZSLAM/param/movingVer3.pth
+    load: True
+    encoder_load_path: /home/wangzimo/VTT/ZSLAM/param/movingVer3.pth
     image_size: 64
 
     mlp:
